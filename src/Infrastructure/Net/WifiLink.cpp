@@ -9,22 +9,29 @@ bool WifiLink::connect() {
 
     Serial.println("[WIFI] Iniciando conexión WiFi...");
     WiFi.mode(WIFI_STA);
-    WiFi.begin();
+
+    if (!ssid_.empty()) {
+        Serial.printf("[WIFI] Conectando a red SSID: %s\n", ssid_.c_str());
+        WiFi.begin(ssid_.c_str(), pass_.c_str());
+    } else {
+        Serial.println("[WIFI] Conectando con credenciales previas guardadas...");
+        WiFi.begin();
+    }
 
     unsigned long start = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - start < connectTimeoutMs_) {
-        delay(100);
+        delay(150);
         Serial.print(".");
     }
     Serial.println();
 
     if (WiFi.status() == WL_CONNECTED) {
-        Serial.printf("[WIFI] Conectado! IP: %s, RSSI: %d dBm\n",
+        Serial.printf("[WIFI] ¡Conectado! IP: %s, RSSI: %d dBm\n",
                       WiFi.localIP().toString().c_str(), WiFi.RSSI());
         return true;
     }
 
-    Serial.println("[WIFI] No se pudo conectar a red conocida");
+    Serial.println("[WIFI] No se pudo conectar a la red WiFi");
     return false;
 }
 
@@ -46,9 +53,13 @@ void WifiLink::loop() {
         if (now - lastReconnectAttempt_ > 10000) {
             lastReconnectAttempt_ = now;
             Serial.println("[WIFI] Intentando reconexión...");
-            WiFi.begin();
+            if (!ssid_.empty()) {
+                WiFi.begin(ssid_.c_str(), pass_.c_str());
+            } else {
+                WiFi.begin();
+            }
         }
     }
 }
 
-}
+} // namespace relay::infra

@@ -12,22 +12,22 @@
   #define NDEBUG
 #endif
 
-const unsigned long WIFI_CONNECT_TIMEOUT = 5000;
+constexpr unsigned long WIFI_CONNECT_TIMEOUT = 5000;
 
-const char* ntpServer1 = "pool.ntp.org";
-const char* ntpServer2 = "time.nist.gov";
-const long gmtOffset_sec = -4 * 3600;
-const int daylightOffset_sec = 0;
+constexpr const char* ntpServer1 = "pool.ntp.org";
+constexpr const char* ntpServer2 = "time.nist.gov";
+constexpr long gmtOffset_sec = -4 * 3600;
+constexpr int daylightOffset_sec = 0;
 
-const char* MQTT_SERVER = "YOUR_MQTT_SERVER_HERE";
-const int MQTT_PORT = 8883;
-const char* API_KEY = "YOUR_API_KEY_HERE";
-const unsigned long MQTT_RECONNECT_INTERVAL = 10000;
-const int MQTT_SOCKET_TIMEOUT = 30;
-const size_t MQTT_BUFFER_SIZE = 4096;
-const unsigned long MQTT_KEEP_ALIVE = 60;
+constexpr const char* MQTT_SERVER = "YOUR_MQTT_SERVER_HERE";
+constexpr int MQTT_PORT = 8883;
+constexpr const char* API_KEY = "YOUR_API_KEY_HERE";
+constexpr unsigned long MQTT_RECONNECT_INTERVAL = 10000;
+constexpr int MQTT_SOCKET_TIMEOUT = 30;
+constexpr size_t MQTT_BUFFER_SIZE = 4096;
+constexpr unsigned long MQTT_KEEP_ALIVE = 60;
 
-const char* root_ca_pem = \
+inline const char* root_ca_pem = \
 "-----BEGIN CERTIFICATE-----\n" \
 "YOUR_SSL_CERTIFICATE_HERE\n" \
 "-----END CERTIFICATE-----\n";
@@ -38,11 +38,11 @@ constexpr uint8_t wifiLed = 2;
 constexpr uint8_t DEBOUNCE_TIME = 50;
 constexpr uint16_t BUTTON_LONG_PRESS_TIME = 3000;
 
-const unsigned long STATUS_PUBLISH_INTERVAL = 3600000;
-const unsigned long TIME_SYNC_INTERVAL = 3600000;
-const int FAST_BLINK_INTERVAL = 100;
-const int SLOW_BLINK_INTERVAL = 400;
+constexpr unsigned long STATUS_PUBLISH_INTERVAL = 3600000;
+constexpr unsigned long TIME_SYNC_INTERVAL = 3600000;
+constexpr int FAST_BLINK_INTERVAL = 100;
+constexpr int SLOW_BLINK_INTERVAL = 400;
 
-const char* FIRMWARE_VERSION = "v0.0.7";
+constexpr const char* FIRMWARE_VERSION = "v0.0.8";
 
 #endif

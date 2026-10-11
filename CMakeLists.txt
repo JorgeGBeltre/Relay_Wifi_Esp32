@@ -26,6 +26,8 @@ set(RELAY_INFRASTRUCTURE_SOURCES
     src/Infrastructure/Serialization/ArduinoJsonPayloadSerializer.cpp
     src/Infrastructure/System/EspDeviceRepository.cpp
     src/Infrastructure/Time/NtpTimeProvider.cpp
+    src/Infrastructure/Config/nvs_config.cpp
+    src/Infrastructure/Provisioning/ble_provisioning.cpp
 )
 
 add_library(relay_core STATIC ${RELAY_APPLICATION_SOURCES})
