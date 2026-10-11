@@ -1,6 +1,6 @@
 # Relay-Wifi
 
-**Enterprise-Grade Smart Relay Controller for ESP32 with Clean Architecture, Native MQTT 5.0, Bluetooth Low Energy (BLE) Provisioning, and Secure Chunked OTA**
+**Smart Relay Controller for ESP32 with Clean Architecture, Native MQTT 5.0, Bluetooth Low Energy (BLE) Provisioning, and Secure Chunked OTA**
 
 [![Platform](https://img.shields.io/badge/platform-ESP32-blue)](https://www.espressif.com/en/products/socs/esp32)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-green)](https://en.cppreference.com/w/cpp/17)
@@ -12,7 +12,7 @@
 
 ---
 
-**Relay-Wifi** is a production-ready, highly reliable firmware for ESP32 smart relay and IoT actuator devices. Engineered following strict **Clean Architecture (Hexagonal / Onion Architecture)** principles, the project completely decouples core business and domain rules from external drivers, frameworks, and hardware peripherals.
+**Relay-Wifi** is an open-source firmware for ESP32 smart switches and relays, designed with Clean Architecture, MQTT 5.0, and BLE provisioning. Engineered following strict **Clean Architecture (Hexagonal / Onion Architecture)** principles, the project completely decouples core business and domain rules from external drivers, frameworks, and hardware peripherals.
 
 The system natively integrates **[ESP32_MQTTv5](https://github.com/JorgeGBeltre/ESP32_MQTTv5)** for secure, session-aware MQTT 5.0 telemetry and command handling, **[MQTTOTAv5](https://github.com/JorgeGBeltre/MQTTOTAv5)** for chunked Over-The-Air updates with SHA-256 integrity verification, and **Bluetooth Low Energy (BLE) Provisioning** powered by **[NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino)** for frictionless onboarding via mobile apps.
 
@@ -72,7 +72,7 @@ The system natively integrates **[ESP32_MQTTv5](https://github.com/JorgeGBeltre/
 
 ## Architecture
 
-The project adheres to Robert C. Martin's Clean Architecture pattern, engineered specifically for enterprise-grade IoT smart switches.
+The project adheres to Robert C. Martin's Clean Architecture pattern, engineered for modularity, testability, and clean separation of concerns.
 
 ### Layer Separation
 
