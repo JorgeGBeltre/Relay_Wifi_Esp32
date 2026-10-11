@@ -6,30 +6,22 @@
 #include <WiFi.h>
 #include <sstream>
 
-// =============================================================================
-// UUIDs compatibles con la aplicación móvil (Esquema GLP_Presure + Enlace Sonoff)
-// Diseñado para configuración de credenciales, autoidentificación de hardware
-// (Device ID + Device Key) y vinculación con la cuenta de usuario (Bind Token).
-// =============================================================================
 #define SERVICE_UUID          "12345678-1234-1234-1234-123456789abc"
-#define CHAR_BROKER_UUID      "aaaaaaaa-bbbb-cccc-dddd-000000000004" // Servidor en la nube / Broker MQTT
-#define CHAR_PORT_UUID        "aaaaaaaa-bbbb-cccc-dddd-000000000005" // Puerto del servidor
-#define CHAR_MQTTUSER_UUID    "aaaaaaaa-bbbb-cccc-dddd-000000000006" // Cuenta de usuario / ID de cuenta
-#define CHAR_MQTTPASS_UUID    "aaaaaaaa-bbbb-cccc-dddd-000000000007" // Contraseña de autenticación
-#define CHAR_DEVID_UUID       "aaaaaaaa-bbbb-cccc-dddd-000000000008" // Device ID (cédula única de hardware)
-#define CHAR_OTAKEY_UUID      "aaaaaaaa-bbbb-cccc-dddd-000000000011" // Clave de firma OTA
-#define CHAR_WIFISSID_UUID    "aaaaaaaa-bbbb-cccc-dddd-000000000012" // Nombre red WiFi (SSID)
-#define CHAR_WIFIPASS_UUID    "aaaaaaaa-bbbb-cccc-dddd-000000000013" // Contraseña WiFi
-#define CHAR_FRAME_JSON_UUID  "aaaaaaaa-bbbb-cccc-dddd-000000000014" // Trama de datos y diagnóstico completo
-#define CHAR_DEVKEY_UUID      "aaaaaaaa-bbbb-cccc-dddd-000000000015" // Device Key / Clave criptográfica privada de fábrica
-#define CHAR_BINDTOKEN_UUID   "aaaaaaaa-bbbb-cccc-dddd-000000000016" // Token de reclamo / vinculación a cuenta
-#define CHAR_SAVE_UUID        "aaaaaaaa-bbbb-cccc-dddd-000000000099" // Disparador Guardar en NVS + ACK
+#define CHAR_BROKER_UUID      "aaaaaaaa-bbbb-cccc-dddd-000000000004"
+#define CHAR_PORT_UUID        "aaaaaaaa-bbbb-cccc-dddd-000000000005"
+#define CHAR_MQTTUSER_UUID    "aaaaaaaa-bbbb-cccc-dddd-000000000006"
+#define CHAR_MQTTPASS_UUID    "aaaaaaaa-bbbb-cccc-dddd-000000000007"
+#define CHAR_DEVID_UUID       "aaaaaaaa-bbbb-cccc-dddd-000000000008"
+#define CHAR_OTAKEY_UUID      "aaaaaaaa-bbbb-cccc-dddd-000000000011"
+#define CHAR_WIFISSID_UUID    "aaaaaaaa-bbbb-cccc-dddd-000000000012"
+#define CHAR_WIFIPASS_UUID    "aaaaaaaa-bbbb-cccc-dddd-000000000013"
+#define CHAR_FRAME_JSON_UUID  "aaaaaaaa-bbbb-cccc-dddd-000000000014"
+#define CHAR_DEVKEY_UUID      "aaaaaaaa-bbbb-cccc-dddd-000000000015"
+#define CHAR_BINDTOKEN_UUID   "aaaaaaaa-bbbb-cccc-dddd-000000000016"
+#define CHAR_SAVE_UUID        "aaaaaaaa-bbbb-cccc-dddd-000000000099"
 
 static bool _configSaved = false;
 
-// -----------------------------------------------------------------------------
-// Utilidad: Parseo de trama JSON para credenciales y enlace de cuenta (Sonoff style)
-// -----------------------------------------------------------------------------
 static bool parseJsonCredentials(const std::string& raw) {
     size_t first = raw.find_first_not_of(" \t\r\n");
     if (first == std::string::npos || raw[first] != '{') return false;
@@ -41,7 +33,6 @@ static bool parseJsonCredentials(const std::string& raw) {
         return false;
     }
 
-    // Credenciales WiFi
     if (doc.containsKey("wifi_ssid")) config.wifi_ssid = doc["wifi_ssid"].as<String>();
     else if (doc.containsKey("ssid")) config.wifi_ssid = doc["ssid"].as<String>();
 
@@ -49,7 +40,6 @@ static bool parseJsonCredentials(const std::string& raw) {
     else if (doc.containsKey("pass")) config.wifi_pass = doc["pass"].as<String>();
     else if (doc.containsKey("password")) config.wifi_pass = doc["password"].as<String>();
 
-    // Servidor / Broker en la nube (ej. servidor regional América / Europa)
     if (doc.containsKey("mqtt_broker")) config.mqtt_broker = doc["mqtt_broker"].as<String>();
     else if (doc.containsKey("broker")) config.mqtt_broker = doc["broker"].as<String>();
     else if (doc.containsKey("server")) config.mqtt_broker = doc["server"].as<String>();
@@ -57,7 +47,6 @@ static bool parseJsonCredentials(const std::string& raw) {
     if (doc.containsKey("mqtt_port")) config.mqtt_port = doc["mqtt_port"].as<int>();
     else if (doc.containsKey("port")) config.mqtt_port = doc["port"].as<int>();
 
-    // Cuenta / Usuario de la plataforma (ej. correo de la cuenta o user ID)
     if (doc.containsKey("account")) config.mqtt_user = doc["account"].as<String>();
     else if (doc.containsKey("user")) config.mqtt_user = doc["user"].as<String>();
     else if (doc.containsKey("user_id")) config.mqtt_user = doc["user_id"].as<String>();
@@ -69,7 +58,6 @@ static bool parseJsonCredentials(const std::string& raw) {
     if (doc.containsKey("mqtt_pass")) config.mqtt_pass = doc["mqtt_pass"].as<String>();
     else if (doc.containsKey("pass_mqtt")) config.mqtt_pass = doc["pass_mqtt"].as<String>();
 
-    // Identidad de hardware: Device ID y Device Key (estilo Sonoff)
     if (doc.containsKey("device_id")) config.device_id = doc["device_id"].as<String>();
     else if (doc.containsKey("id")) config.device_id = doc["id"].as<String>();
     else if (doc.containsKey("deviceid")) config.device_id = doc["deviceid"].as<String>();
@@ -78,7 +66,6 @@ static bool parseJsonCredentials(const std::string& raw) {
     else if (doc.containsKey("devicekey")) config.device_key = doc["devicekey"].as<String>();
     else if (doc.containsKey("apikey")) config.device_key = doc["apikey"].as<String>();
 
-    // Token de vinculación / reclamo para enlazar a la cuenta
     if (doc.containsKey("bind_token")) config.bind_token = doc["bind_token"].as<String>();
     else if (doc.containsKey("token")) config.bind_token = doc["token"].as<String>();
     else if (doc.containsKey("claim_token")) config.bind_token = doc["claim_token"].as<String>();
@@ -91,9 +78,6 @@ static bool parseJsonCredentials(const std::string& raw) {
     return true;
 }
 
-// -----------------------------------------------------------------------------
-// Utilidad: Parseo de trama delimitada Clave=Valor
-// -----------------------------------------------------------------------------
 static bool parseKeyValueFrame(const std::string& raw) {
     auto trim = [](const std::string& s) -> std::string {
         size_t start = s.find_first_not_of(" \t\r\n\"'");
@@ -145,9 +129,6 @@ static bool parseFrame(const std::string& raw) {
     return false;
 }
 
-// -----------------------------------------------------------------------------
-// Callbacks del Servidor NimBLE
-// -----------------------------------------------------------------------------
 class ServerCallbacks : public NimBLEServerCallbacks {
     void onConnect(NimBLEServer* pServer) override {
         Serial.println("[BLE] App móvil conectada al dispositivo.");
@@ -157,9 +138,6 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     }
 };
 
-// -----------------------------------------------------------------------------
-// Callbacks para Características GATT
-// -----------------------------------------------------------------------------
 class StringWriteCallback : public NimBLECharacteristicCallbacks {
 public:
     String* _target;
@@ -195,7 +173,6 @@ public:
     }
 };
 
-// Device ID: La cédula del dispositivo ante la app y servidores
 class DevIdCallback : public NimBLECharacteristicCallbacks {
 public:
     void onRead(NimBLECharacteristic* c) override {
@@ -212,7 +189,6 @@ public:
     }
 };
 
-// Device Key: Llave secreta del hardware expuesta para verificación de autenticidad
 class DevKeyCallback : public NimBLECharacteristicCallbacks {
 public:
     void onRead(NimBLECharacteristic* c) override {
@@ -221,7 +197,6 @@ public:
     }
 };
 
-// Bind Token: Token de emparejamiento / reclamo inyectado por la app para enlazar la cuenta
 class BindTokenCallback : public NimBLECharacteristicCallbacks {
 public:
     void onRead(NimBLECharacteristic* c) override {
@@ -235,7 +210,6 @@ public:
     }
 };
 
-// Save Callback: Persiste en NVS y confirma con ACK ("OK")
 class SaveCallback : public NimBLECharacteristicCallbacks {
 public:
     void onRead(NimBLECharacteristic* c) override {
@@ -254,14 +228,13 @@ public:
     }
 };
 
-// Trama unificada y Diagnóstico dinámico (Estilo Sonoff: Reporte de identidad completo)
 class FrameCallback : public NimBLECharacteristicCallbacks {
 public:
     void onRead(NimBLECharacteristic* c) override {
         StaticJsonDocument<512> idDoc;
         idDoc["device_type"] = "Relay-Wifi";
         idDoc["device_id"]   = config.device_id;
-        idDoc["device_key"]  = config.device_key; // Clave de fábrica compartida a la app para cifrado/enlace
+        idDoc["device_key"]  = config.device_key;
         idDoc["mac"]         = WiFi.macAddress();
         idDoc["version"]     = FIRMWARE_VERSION;
         idDoc["wifi_ssid"]   = config.wifi_ssid;
@@ -269,7 +242,6 @@ public:
         idDoc["port"]        = config.mqtt_port;
         idDoc["account"]     = config.mqtt_user;
         idDoc["bind_token"]  = config.bind_token;
-        // Estado: ready_to_claim (listo para ser reclamado por la cuenta) o configured
         idDoc["status"]      = _configSaved ? "configured" : "ready_to_claim";
 
         String json;
@@ -295,7 +267,6 @@ public:
 };
 
 void initBLEProvisioning() {
-    // Inicialización bajo demanda en runBLEProvisioning
 }
 
 bool runBLEProvisioning(unsigned long timeoutMs) {
@@ -304,7 +275,6 @@ bool runBLEProvisioning(unsigned long timeoutMs) {
     Serial.println("[BLE] =========================================");
     _configSaved = false;
 
-    // 1. Garantizar Device ID único de hardware (cédula del dispositivo)
     if (config.device_id.length() == 0) {
         uint64_t chipId = ESP.getEfuseMac();
         char buf[16];
@@ -312,7 +282,6 @@ bool runBLEProvisioning(unsigned long timeoutMs) {
         config.device_id = String(buf);
     }
 
-    // 2. Garantizar Device Key criptográfica única de fábrica (llave secreta de hardware)
     if (config.device_key.length() == 0) {
         uint64_t mac = ESP.getEfuseMac();
         char buf[37];
@@ -332,9 +301,6 @@ bool runBLEProvisioning(unsigned long timeoutMs) {
     NimBLEServer* server = NimBLEDevice::createServer();
     server->setCallbacks(new ServerCallbacks());
 
-    // -------------------------------------------------------------------------
-    // Servicio Estándar Device Information (0x180A) para reconocimiento universal
-    // -------------------------------------------------------------------------
     NimBLEService* dis = server->createService(NimBLEUUID((uint16_t)0x180A));
     if (dis) {
         NimBLECharacteristic* mChar = dis->createCharacteristic(
@@ -360,9 +326,6 @@ bool runBLEProvisioning(unsigned long timeoutMs) {
         dis->start();
     }
 
-    // -------------------------------------------------------------------------
-    // Servicio Principal de Aprovisionamiento y Enlace de Cuenta
-    // -------------------------------------------------------------------------
     NimBLEService* service = server->createService(SERVICE_UUID);
 
     auto mkChar = [&](const char* uuid, String* field) {
@@ -373,44 +336,37 @@ bool runBLEProvisioning(unsigned long timeoutMs) {
         return ch;
     };
 
-    // Credenciales WiFi y Servidor (UUIDs idénticos a GLP_Presure)
     mkChar(CHAR_WIFISSID_UUID,  &config.wifi_ssid);
     mkChar(CHAR_WIFIPASS_UUID,  &config.wifi_pass);
     mkChar(CHAR_BROKER_UUID,    &config.mqtt_broker);
-    mkChar(CHAR_MQTTUSER_UUID,  &config.mqtt_user); // Cuenta / Usuario
+    mkChar(CHAR_MQTTUSER_UUID,  &config.mqtt_user);
     mkChar(CHAR_MQTTPASS_UUID,  &config.mqtt_pass);
     mkChar(CHAR_OTAKEY_UUID,    &config.ota_hmac_key);
 
-    // Identificación de hardware: Device ID
     NimBLECharacteristic* devIdChar = service->createCharacteristic(
         CHAR_DEVID_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::READ);
     devIdChar->setCallbacks(new DevIdCallback());
     devIdChar->setValue(config.device_id.c_str());
 
-    // Identificación de hardware: Device Key de fábrica (solo lectura por la app para autenticación)
     NimBLECharacteristic* devKeyChar = service->createCharacteristic(
         CHAR_DEVKEY_UUID, NIMBLE_PROPERTY::READ);
     devKeyChar->setCallbacks(new DevKeyCallback());
     devKeyChar->setValue(config.device_key.c_str());
 
-    // Token de vinculación / reclamo (inyectado por la app para registrar a nombre del usuario)
     NimBLECharacteristic* bindTokenChar = service->createCharacteristic(
         CHAR_BINDTOKEN_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::READ);
     bindTokenChar->setCallbacks(new BindTokenCallback());
     bindTokenChar->setValue(config.bind_token.c_str());
 
-    // Puerto de servidor (entero, soporta string ASCII o binario uint16/32)
     NimBLECharacteristic* portChar = service->createCharacteristic(
         CHAR_PORT_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::READ);
     portChar->setCallbacks(new PortWriteCallback(&config.mqtt_port));
     portChar->setValue(String(config.mqtt_port).c_str());
 
-    // Trama Unificada y Reporte de Identidad ("ready_to_claim")
     NimBLECharacteristic* frameChar = service->createCharacteristic(
         CHAR_FRAME_JSON_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
     frameChar->setCallbacks(new FrameCallback());
 
-    // Inicializar reporte de identidad en frameChar
     StaticJsonDocument<512> initDoc;
     initDoc["device_type"] = "Relay-Wifi";
     initDoc["device_id"]   = config.device_id;
@@ -427,7 +383,6 @@ bool runBLEProvisioning(unsigned long timeoutMs) {
     serializeJson(initDoc, initJson);
     frameChar->setValue(initJson.c_str());
 
-    // Característica Guardar / Notificar ACK
     NimBLECharacteristic* saveChar = service->createCharacteristic(
         CHAR_SAVE_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
     saveChar->setCallbacks(new SaveCallback());
@@ -435,9 +390,6 @@ bool runBLEProvisioning(unsigned long timeoutMs) {
 
     service->start();
 
-    // -------------------------------------------------------------------------
-    // Inicio de Publicidad BLE
-    // -------------------------------------------------------------------------
     NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
     adv->addServiceUUID(SERVICE_UUID);
     adv->setScanResponse(true);
@@ -454,7 +406,7 @@ bool runBLEProvisioning(unsigned long timeoutMs) {
     while ((millis() - start) < timeoutMs) {
         if (_configSaved) {
             Serial.println("[BLE] ¡Aprovisionamiento y enlace a la cuenta completados con éxito!");
-            delay(600); // Permite transmitir la notificación ACK a la app móvil
+            delay(600);
             adv->stop();
             NimBLEDevice::deinit(true);
             return true;
@@ -467,5 +419,3 @@ bool runBLEProvisioning(unsigned long timeoutMs) {
     NimBLEDevice::deinit(true);
     return false;
 }
-
-

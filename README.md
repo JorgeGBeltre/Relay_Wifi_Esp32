@@ -29,8 +29,8 @@ The system natively integrates **[ESP32_MQTTv5](https://github.com/JorgeGBeltre/
 - [Configuration & Placeholders](#configuration--placeholders)
 - [Bluetooth BLE Provisioning & Mobile App Integration](#bluetooth-ble-provisioning--mobile-app-integration)
   - [Overview & Workflow](#overview--workflow)
+  - [Step-by-Step Onboarding & Account Claiming Lifecycle](#step-by-step-onboarding--account-claiming-lifecycle)
   - [GATT Service & Characteristics Layout](#gatt-service--characteristics-layout)
-  - [Sonoff-Style Account Binding & Mutual Identification](#sonoff-style-account-binding--mutual-identification)
   - [Standard Bluetooth Device Information Service (0x180A)](#standard-bluetooth-device-information-service-0x180a)
   - [Provisioning via Individual Characteristics](#provisioning-via-individual-characteristics)
   - [Provisioning via Unified Data Frames (BLE Frames)](#provisioning-via-unified-data-frames-ble-frames)
@@ -60,7 +60,7 @@ The system natively integrates **[ESP32_MQTTv5](https://github.com/JorgeGBeltre/
 | **Clean Architecture** | Pure Domain (zero-dependency C++17 entities/interfaces), decoupled Application services, isolated Infrastructure drivers, and unified Presentation composition root |
 | **Native MQTT 5.0** | Powered by `ESP32_MQTTv5` — TLS encryption (`WiFiClientSecure`), keep-alive, sessions, properties, and JSON Last Will & Testament (LWT) |
 | **Secure OTA Updates** | Powered by `MQTTOTAv5` — chunked binary transfers over MQTT 5.0, SHA-256 hash checks, automatic rollback protection, and non-blocking restarts |
-| **Bluetooth (BLE) Provisioning** | Powered by `NimBLE-Arduino` (protocol schema matching `GLP_Presure`) — runtime provisioning of WiFi & MQTT credentials via mobile app frames or individual GATT characteristics, with device self-identification |
+| **Bluetooth (BLE) Provisioning** | Powered by `NimBLE-Arduino` — Sonoff/eWeLink-style onboarding for WiFi & MQTT/cloud server credentials via mobile app frames or individual GATT characteristics, with hardware self-identification (Device ID + factory Device Key) and account claim tokens |
 | **Dual Control Flow** | Physical button support (debounced short press for relay toggle) and remote cloud actuation (state synchronization, get/set commands) |
 | **Dual Provisioning Portals** | Primary BLE Provisioning with automatic fallback to SoftAP Web Portal (`WiFiManager` / `VESIS-<ChipID>`) on timeout or button long-press |
 | **NVS Persistent Storage** | Dynamic credentials and IDs persisted non-volatilely via `Preferences` in the `relay-config` namespace |
@@ -72,7 +72,7 @@ The system natively integrates **[ESP32_MQTTv5](https://github.com/JorgeGBeltre/
 
 ## Architecture
 
-The project adheres to Robert C. Martin's Clean Architecture pattern, mirroring the design conventions of enterprise ESP32 systems like `GLP_Presure`.
+The project adheres to Robert C. Martin's Clean Architecture pattern, engineered specifically for enterprise-grade IoT smart switches.
 
 ### Layer Separation
 
@@ -257,12 +257,13 @@ inline const char* root_ca_pem = "-----BEGIN CERTIFICATE-----
 
 ## Bluetooth BLE Provisioning & Mobile App Integration
 
-The system implements on-demand Bluetooth Low Energy (BLE) provisioning, fully compatible with mobile applications using the identical GATT protocol schema from `GLP_Presure`.
+The system implements on-demand Bluetooth Low Energy (BLE) provisioning engineered specifically for smart switches, mirroring the hardware identity and account-binding architecture of Sonoff / eWeLink devices.
 
 This channel is focused strictly on:
-1. **Device Self-Identification**: Allows the mobile app to scan, connect, and identify the device type, MAC address, chip ID, and firmware version.
-2. **Credential Provisioning**: Configures WiFi SSID/password and MQTT broker credentials (host, port, user/API key, password, device ID, OTA key) without needing measurement parameters or cellular/APN fields.
-3. **Data Frame Handling**: Accepts both individual GATT characteristic writes and unified JSON data frames ("tramas").
+1. **Device Self-Identification**: The switch exposes its factory `Device ID` (unique hardware serial number) and `Device Key` (`apikey` private cryptographic key) to allow mobile apps to authenticate hardware authenticity.
+2. **Credential Provisioning**: Injects WiFi credentials (`ssid`, `password`) and cloud server / MQTT broker endpoint (`server`, `port`, `account`, `password`, `ota_key`).
+3. **Account Binding (Claim Token)**: Injects the user's active session claim token (`bind_token`) to permanently bind the switch to the user's profile upon first cloud connection.
+4. **Data Frame Handling**: Accepts both individual GATT characteristic writes and unified JSON or Key=Value data frames ("tramas").
 
 ### Overview & Workflow
 
@@ -306,24 +307,70 @@ This channel is focused strictly on:
 | **Save / ACK** | `aaaaaaaa-bbbb-cccc-dddd-000000000099` | `WRITE` / `READ` / `NOTIFY` | Save trigger into NVS and ACK notification (`"OK"`). Also accepts direct frame writes | `"READY"` -> Notifies `"OK"` |
 
 > [!NOTE]
-> **Compatibility with `GLP_Presure` & Sonoff/eWeLink Model**: The UUID layout maintains backwards compatibility with `GLP_Presure` (`...0004` to `...0013`, `...0099`) while introducing `...0015` (`device_key`) and `...0016` (`bind_token`) to support hardware identification and account claiming. Tank measurement parameters (`radius` ...0009, `length` ...0010) and cellular parameters (`apn` ...0001, `apn_user` ...0002, `apn_pass` ...0003) have been deliberately excluded, keeping the device streamlined for WiFi smart switches.
+> **Dedicated Smart Switch Architecture**: This BLE provisioning implementation is purpose-built for WiFi smart switches. It exclusively configures WiFi credentials, server/broker endpoints, hardware identification (Device ID and factory Device Key), and user account claiming (Bind Token).
 
-### Sonoff-Style Account Binding & Mutual Identification
+### Step-by-Step Onboarding & Account Claiming Lifecycle
 
-Provisioning solves both local WiFi connectivity and **permanent switch-to-user account binding**:
+The provisioning flow mirrors the exact security and association lifecycle of Sonoff / eWeLink smart switches through a 7-step deterministic process:
 
-1. **Hardware Mutual Identification (Device ID + Device Key)**:
-   - On boot, the switch advertises via BLE as `RELAY-<DeviceID>` and exposes its `Device ID` (unique hardware identity) and factory `Device Key` (private cryptographic key).
-   - The mobile application (logged into the user's account) detects the switch and reads these parameters to verify factory authenticity.
-2. **Credential & Account Claim Token Injection (Bind Token)**:
-   - The mobile app injects into the switch:
-     - Local WiFi network credentials (`ssid` and `password`).
-     - Regional cloud server or MQTT broker endpoint (`server` and `port`).
-     - Account claim token (`bind_token` / `account`) generated by the active user session.
-3. **Claiming and Registration ("ready_to_claim")**:
-   - The firmware commits these parameters to non-volatile flash (NVS) and fires an `"OK"` BLE notification.
-   - Upon reboot and connecting to WiFi, the device reaches out to the cloud server indicating it is ready to be claimed with its `Device ID`, `Device Key`, and `Bind Token`.
-   - The cloud server validates the active user session token and permanently associates the switch's `Device ID` with that user account.
+#### Step 1: Hardware Identity Generation & Initialization
+1. Upon entering provisioning mode, the firmware inspects the non-volatile storage (`NVS`, namespace `relay-config`).
+2. **Device ID Generation**: If no `device_id` is stored, the firmware extracts the ESP32's factory eFuse MAC address via `ESP.getEfuseMac()` and formats it into a 12-character uppercase hexadecimal string:
+   ```cpp
+   uint64_t chipId = ESP.getEfuseMac();
+   snprintf(buf, sizeof(buf), "%04X%08X", (uint16_t)(chipId >> 32), (uint32_t)chipId);
+   ```
+   This serves as the unique hardware serial number ("cédula de identidad") recognized by mobile apps and cloud servers.
+3. **Factory Device Key Generation**: If no `device_key` is stored, the firmware derives a factory-grade UUID v4 cryptographic key using the hardware MAC entropy, bit shifting, and XOR masking (`%08X-%04X-4%03X-%04X-%012llX`). This key acts as the factory private symmetric key (`apikey` / `devicekey`) used for LAN-mode encryption and hardware authenticity verification.
+4. Both keys are permanently stored in NVS and will survive reboots and OTA updates.
+
+#### Step 2: BLE Stack & GATT Server Startup
+1. The firmware sets the BLE local advertising name to `RELAY-<DeviceID>` (e.g., `RELAY-0000A1B2C3D4`).
+2. The NimBLE stack initializes with an extended MTU of **512 bytes**, allowing high-throughput JSON frame transfers without packet truncation.
+3. The server starts the standard **Bluetooth SIG Device Information Service** (`0x180A`) for universal mobile OS compatibility.
+4. The server creates the primary **Relay Provisioning Service** (`12345678-1234-1234-1234-123456789abc`) and registers all credential and identity characteristics.
+5. Advertising begins with active scan response enabled, remaining active for the duration of the timeout period (default: 60,000 ms).
+
+#### Step 3: Mobile App Scanning & Hardware Authenticity Verification
+1. The user opens the mobile application (where they have already authenticated into their cloud user account).
+2. The mobile app scans for BLE peripherals matching the `RELAY-*` prefix or advertising the Service UUID.
+3. Upon connection, the app reads:
+   - `CHAR_DEVID_UUID` (`...0008`): Confirms the target device ID.
+   - `CHAR_DEVKEY_UUID` (`...0015`): Reads the factory cryptographic secret key (`apikey`).
+   - Or alternatively, issues a single `READ` to `CHAR_FRAME_JSON_UUID` (`...0014`), which returns a live JSON payload with `"status": "ready_to_claim"`.
+4. The mobile app validates the cryptographic `Device Key` against cloud authority records to certify that the physical hardware is genuine before prompting the user for network credentials.
+
+#### Step 4: Credential & Account Claim Token Injection
+The mobile app injects the required configuration into the switch. The firmware supports three interchangeable injection workflows:
+- **Method A (Unified JSON Frame)**: The app sends a single JSON payload to `CHAR_FRAME_JSON_UUID` (`...0014`) or `CHAR_SAVE_UUID` (`...0099`) containing WiFi credentials, server endpoint, user account, and the active session claim token (`bind_token`).
+- **Method B (Delimited Key=Value Frame)**: The app sends a compact delimited string (`ssid=...;pass=...;server=...;port=...;account=...;token=...`) formatted with `;`, `&`, or newlines.
+- **Method C (Individual GATT Characteristics)**: The app writes to dedicated characteristics sequentially:
+  - `CHAR_WIFISSID_UUID` (`...0012`): Target 2.4 GHz WiFi SSID.
+  - `CHAR_WIFIPASS_UUID` (`...0013`): Target WiFi WPA/WPA2 passphrase.
+  - `CHAR_BROKER_UUID` (`...0004`): Regional cloud server or MQTT broker hostname/IP.
+  - `CHAR_PORT_UUID` (`...0005`): Server port (e.g., `8883` TLS or `1883`).
+  - `CHAR_MQTTUSER_UUID` (`...0006`): User account identifier or email address.
+  - `CHAR_BINDTOKEN_UUID` (`...0016`): The account claim token generated by the cloud for the logged-in user.
+
+#### Step 5: NVS Flash Persistence & BLE ACK Handshake
+1. Once all parameters are received (or upon receiving `"SAVE"` on `CHAR_SAVE_UUID` `...0099`), the firmware commits the configuration to flash memory using the `Preferences` API under the `relay-config` namespace.
+2. The internal flag `_configSaved` is set to `true`.
+3. The firmware immediately triggers a BLE notification with the payload `"OK"` on both `CHAR_SAVE_UUID` (`...0099`) and `CHAR_FRAME_JSON_UUID` (`...0014`).
+4. The mobile app receives the `"OK"` ACK and updates its UI to notify the user that provisioning succeeded.
+5. The firmware pauses for a 600 ms grace period to guarantee that the BLE ACK packet is completely transmitted over the air before shutting down the radio.
+
+#### Step 6: Controlled Reboot & Cloud Account Claiming
+1. The firmware stops BLE advertising, cleanly deinitializes the NimBLE stack (`NimBLEDevice::deinit(true)`), and reboots the ESP32.
+2. Upon restart, the firmware reads the newly saved credentials from NVS and initiates a station connection to the local WiFi access point.
+3. Once WiFi is connected, the device establishes a TLS connection to the configured cloud broker.
+4. The switch reports its identity and claim payload (`Device ID`, `Device Key`, and `Bind Token`).
+5. The cloud backend validates that the `Bind Token` matches the user's active session, registers the switch's `Device ID` under that user's account, and locks the device so that no other user can claim it unless released by the owner.
+6. The switch is now fully operational, reporting status via MQTT 5.0 and listening for remote commands.
+
+#### Step 7: Dual-Portal Fallback & Rescue Mode
+1. **Unprovisioned First Boot**: If no mobile app connects within 60 seconds of BLE advertising, the system automatically falls back to the SoftAP captive web portal (`VESIS-<ChipID>`).
+2. **Button Long-Press**: Holding GPIO 0 for >3 seconds at any time during operation relaunches the BLE provisioning portal with rapid LED flashing.
+3. **Boot Hold**: Powering up the board with the button depressed forces immediate entry into BLE provisioning.
 
 ---
 
