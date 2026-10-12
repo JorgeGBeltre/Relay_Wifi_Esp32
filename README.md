@@ -632,7 +632,7 @@ cmake .. -DHOST_BUILD=ON
 cmake --build .
 ```
 
-### 3. Backend Implementation
+## Backend Implementation
 
 To use MQTTOTA in your project, you'll need an MQTT/MQTTS/MQTTv5.0 server to manage OTA updates. You can implement your own backend using our reference repository:
 
