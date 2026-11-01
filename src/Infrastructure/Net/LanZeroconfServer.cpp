@@ -57,6 +57,7 @@ void LanZeroconfServer::startServer() {
     registerEndpoint("/zeroconf/info");
     registerEndpoint("/zeroconf/signal_strength");
     registerEndpoint("/zeroconf/wifi");
+    registerEndpoint("/zeroconf/config");
     registerEndpoint("/zeroconf/timers");
     registerEndpoint("/zeroconf/ota_unlock");
 
@@ -278,15 +279,32 @@ void LanZeroconfServer::dispatchZeroconf(const char* uri, const String& rawBody,
         return;
     }
 
-    if (std::strcmp(uri, "/zeroconf/wifi") == 0) {
-        const char* ssid = dataObj["ssid"];
-        const char* pwd = dataObj["password"] | "";
-        if (!ssid || std::strlen(ssid) == 0 || std::strlen(ssid) > 32) {
+    if (std::strcmp(uri, "/zeroconf/wifi") == 0 || std::strcmp(uri, "/zeroconf/config") == 0) {
+        const char* ssid = dataObj["ssid"] | dataObj["wifi_ssid"];
+        if (std::strcmp(uri, "/zeroconf/wifi") == 0 && (!ssid || std::strlen(ssid) == 0 || std::strlen(ssid) > 32)) {
             writeError(400);
             return;
         }
-        devCfg.wifiSsid = ssid;
-        devCfg.wifiPass = pwd;
+        if (ssid && std::strlen(ssid) > 0 && std::strlen(ssid) <= 32) {
+            devCfg.wifiSsid = ssid;
+            devCfg.wifiPass = dataObj["password"] | (dataObj["wifi_pass"] | "");
+        }
+        if (const char* brk = dataObj["mqtt_broker"] | (dataObj["serverName"] | dataObj["server"])) {
+            if (std::strlen(brk) > 0) devCfg.mqttBroker = brk;
+        }
+        if (dataObj.containsKey("mqtt_port") || dataObj.containsKey("port")) {
+            int p = dataObj["mqtt_port"] | (dataObj["port"] | 0);
+            if (p > 0 && p <= 65535) devCfg.mqttPort = p;
+        }
+        if (const char* usr = dataObj["mqtt_user"] | (dataObj["apikey"] | dataObj["account"])) {
+            if (std::strlen(usr) > 0) devCfg.mqttUser = usr;
+        }
+        if (const char* mp = dataObj["mqtt_pass"]) {
+            devCfg.mqttPass = mp;
+        }
+        if (const char* tok = dataObj["bind_token"] | dataObj["token"]) {
+            devCfg.bindToken = tok;
+        }
         configRepo_.save(devCfg);
         writeError(0);
         return;

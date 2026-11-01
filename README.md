@@ -505,7 +505,7 @@ For seamless discovery and status tracking by the mobile app:
 Provisioning is governed by a fault-tolerant 2-stage architecture (`runPairingWorkflow`):
 1. **First Boot (Unprovisioned)**: Starts in Quick Pairing (`runQuickPairing`: BLE GATT + SmartConfig) for 60 seconds. If no configuration is received, it falls back automatically to the SoftAP rescue web portal (`VESIS-<ChipID>`).
 2. **1st Button Long-Press (`5,000 ms`)**: At any point during runtime, holding the physical button for 5 seconds triggers Stage 1 Quick Pairing (`RELAY-<DeviceID>` BLE GATT + SmartConfig) for 180 seconds with the double-blink LED pattern.
-3. **2nd Button Long-Press (`5,000 ms`)**: Holding the physical button for 5 seconds while in Quick Pairing switches immediately to Stage 2 SoftAP (`WifiApProvisioningPortal::startPortal`, SSID `VESIS-<ChipID>`, password `12345678`, timeout `180 s`), exposing fields for WiFi SSID, WiFi Password, MQTT 5.0 Server, Port, API Key / Account, and Bind Token, and persisting them to NVS via `saveConfig()`.
+3. **2nd Button Long-Press (`5,000 ms`)**: Holding the physical button for 5 seconds while in Quick Pairing switches immediately to Stage 2 SoftAP (`WifiApProvisioningPortal::startPortal`, SSID `VESIS-<ChipID>`, password `12345678`, timeout `180 s`), exposing both the HTML captive portal form (`WiFi SSID`, `WiFi Password`, `MQTT 5.0 Server`, `Port`, `API Key / Account`, `MQTT Password`, `Bind Token`, and `Power-On State`) and the Compatible Pairing JSON endpoints (`GET /device` and `POST /ap`), persisting all settings to NVS via `saveConfig()`.
 4. **Short Press Cancel**: Pressing the button briefly while in Quick Pairing or SoftAP exits pairing mode and returns to normal operation.
 
 ---
@@ -617,7 +617,8 @@ All endpoints accept `HTTP POST` with either a plain JSON body (`{"data": {...}}
 | `/zeroconf/sled` | `POST` | Enable or disable the status LED when online | `{"sledOnline":"off"}` |
 | `/zeroconf/info` | `POST` | Query current switch, startup, pulse, SLED, version, and RSSI | `{}` |
 | `/zeroconf/signal_strength` | `POST` | Query current Wi-Fi RSSI in dBm | `{}` |
-| `/zeroconf/wifi` | `POST` | Update stored Wi-Fi SSID and password in NVS | `{"ssid":"NewWiFi","password":"Pass"}` |
+| `/zeroconf/wifi` | `POST` | Update stored Wi-Fi SSID, password, and optional MQTT 5.0 broker parameters in NVS | `{"ssid":"NewWiFi","password":"Pass"}` |
+| `/zeroconf/config` | `POST` | Update MQTT 5.0 broker, port, credentials, bind token, startup, pulse, and SLED in NVS | `{"mqtt_broker":"broker.example.com","mqtt_port":8883,"startup":"stay"}` |
 | `/zeroconf/timers` | `POST` | Replace/configure up to 8 scheduled timers (`once`, `repeat`, `duration`) | `{"timers":[{"id":1,"enabled":1,"type":"once","at":1793500000,"do":{"switch":"on"}}]}` |
 | `/zeroconf/ota_unlock` | `POST` | Unlock local OTA state flag | `{}` |
 
