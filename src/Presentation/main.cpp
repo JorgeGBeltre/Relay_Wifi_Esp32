@@ -49,10 +49,10 @@ static app::TimerSchedulerService*   g_timerScheduler = nullptr;
 static app::RelayFirmwareController* g_controller = nullptr;
 static infra::LanZeroconfServer*     g_lanServer = nullptr;
 
-// Ejecuta el flujo de emparejamiento de 2 etapas estilo Sonoff (0x402333D8):
+// Ejecuta el flujo de emparejamiento de 2 etapas:
 // - Etapa 1 (1ª pulsación larga de 5s o primer arranque): Quick Pairing (BLE GATT + SmartConfig ESP-Touch)
 // - Etapa 2 (2ª pulsación larga de 5s estando en Quick Pairing, o fallback): SoftAP VESIS-<ChipID>
-static void runSonoffPairingWorkflow(bool isInitialUnprovisionedBoot) {
+static void runPairingWorkflow(bool isInitialUnprovisionedBoot) {
     Serial.println("[PAIRING] Entrando en Etapa 1: Quick Pairing (BLE + SmartConfig)...");
     QuickPairingResult res = g_blePortal.runInteractive(
         isInitialUnprovisionedBoot ? 60000UL : 180000UL,
@@ -121,7 +121,7 @@ void setup() {
     // 3. Si no está aprovisionado en el primer arranque, iniciar flujo de emparejamiento
     if (!isProv) {
         g_button1.init();
-        runSonoffPairingWorkflow(true);
+        runPairingWorkflow(true);
         g_configRepo.load(devConfig);
     }
 
@@ -155,7 +155,7 @@ void setup() {
     g_lanServer = &lanServer;
 
     auto provisioningCallback = []() {
-        runSonoffPairingWorkflow(false);
+        runPairingWorkflow(false);
     };
 
     static app::RelayFirmwareController controller{

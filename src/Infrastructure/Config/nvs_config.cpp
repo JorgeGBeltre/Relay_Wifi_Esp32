@@ -12,7 +12,7 @@ static String getDefaultChipId() {
     return String(buf);
 }
 
-// Genera una clave criptográfica de hardware única y permanente para el dispositivo (estilo Sonoff devicekey)
+// Genera una clave criptográfica de hardware única y permanente para el dispositivo (devicekey)
 static String getDefaultDeviceKey() {
     uint64_t mac = ESP.getEfuseMac();
     char buf[37];

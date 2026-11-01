@@ -6,8 +6,8 @@
 namespace relay::app {
 
 /**
- * @brief Primitivas criptográficas puras C++17 (compatibles con HOST_BUILD) para el protocolo LAN Sonoff (/zeroconf/*):
- * - Derivación de clave de 16 bytes mediante MD5(deviceKey) (Sonoff 0x40240800)
+ * @brief Primitivas criptográficas puras C++17 (compatibles con HOST_BUILD) para el protocolo LAN (/zeroconf/*):
+ * - Derivación de clave de 16 bytes mediante MD5(deviceKey)
  * - Cifrado y descifrado AES-128-CBC con relleno PKCS#7
  * - Codificación y decodificación Base64 (RFC 4648)
  */

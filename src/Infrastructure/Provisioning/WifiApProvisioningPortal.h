@@ -79,7 +79,7 @@ public:
                 break;
             }
 
-            // En Sonoff 0x40233450: una pulsación corta en modo SoftAP cancela y sale del modo emparejamiento
+            // Una pulsación corta en modo SoftAP cancela y sale del modo emparejamiento
             if (button) {
                 auto ev = button->update();
                 if (ev == domain::ButtonEvent::ShortPress) {

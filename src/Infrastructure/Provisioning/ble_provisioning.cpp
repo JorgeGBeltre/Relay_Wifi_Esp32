@@ -326,7 +326,7 @@ QuickPairingResult runQuickPairing(unsigned long timeoutMs,
         config.device_key = String(buf);
     }
 
-    // 1. Activar SmartConfig (ESP-Touch / AirKiss) en paralelo (Sonoff 0x4023AC84)
+    // 1. Activar SmartConfig (ESP-Touch / AirKiss) en paralelo
     WiFi.mode(WIFI_STA);
     WiFi.beginSmartConfig();
 
@@ -479,7 +479,7 @@ QuickPairingResult runQuickPairing(unsigned long timeoutMs,
             }
         }
 
-        // C. Evaluar el botón físico durante Quick Pairing (Sonoff 0x402333D8 / 0x40233450)
+        // C. Evaluar el botón físico durante Quick Pairing
         if (button) {
             auto ev = button->update();
             if (ev == relay::domain::ButtonEvent::LongPress) {

@@ -31,16 +31,22 @@ void TimerSchedulerService::saveToStorage() {
 }
 
 bool TimerSchedulerService::upsertTimer(const domain::ScheduledTimer& timer) {
-    for (size_t i = 0; i < MAX_TIMERS; ++i) {
-        if (timers_[i].enabled && timers_[i].id == timer.id) {
-            timers_[i] = timer;
-            saveToStorage();
-            return true;
+    domain::ScheduledTimer entry = timer;
+    if (entry.id != 0) {
+        for (size_t i = 0; i < MAX_TIMERS; ++i) {
+            if (timers_[i].id == entry.id) {
+                timers_[i] = entry;
+                saveToStorage();
+                return true;
+            }
         }
     }
     for (size_t i = 0; i < MAX_TIMERS; ++i) {
-        if (!timers_[i].enabled) {
-            timers_[i] = timer;
+        if (timers_[i].id == 0) {
+            if (entry.id == 0) {
+                entry.id = static_cast<uint8_t>(i + 1);
+            }
+            timers_[i] = entry;
             saveToStorage();
             return true;
         }

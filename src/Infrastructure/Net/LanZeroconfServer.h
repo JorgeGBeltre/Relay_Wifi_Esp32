@@ -12,8 +12,8 @@
 namespace relay::infra {
 
 /**
- * @brief Servidor HTTP LAN local en el puerto 8081 (/zeroconf/*) + mDNS (_ewelink._tcp.local)
- * Compatible con el protocolo LAN de Sonoff (texto claro DIY y sobre cifrado AES-128-CBC con MD5(deviceKey)),
+ * @brief Servidor HTTP LAN local en el puerto 8081 (/zeroconf/*) + mDNS
+ * Soporta control en red local (texto claro JSON y sobre cifrado AES-128-CBC con MD5(deviceKey)),
  * sincronizado en tiempo real con RelayService y TelemetryService (MQTT 5.0).
  */
 class LanZeroconfServer {

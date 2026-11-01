@@ -18,7 +18,7 @@ struct AppConfig {
     String   bind_token;      // Token de registro / reclamo emitido por la app móvil para enlazar la cuenta
     String   ota_hmac_key;    // Clave HMAC para OTA segura
 
-    uint8_t  startup_mode     = 0;     // 0=Off, 1=On, 2=Stay (Sonoff 0x40232C80)
+    uint8_t  startup_mode     = 0;     // 0=Off, 1=On, 2=Stay
     bool     last_relay_state = false; // Último estado persistido para StartupMode::Stay
     bool     pulse_enabled    = false; // Modo pulso (Inching)
     uint32_t pulse_width_ms   = 500;   // Ancho de pulso en ms (500..36000000, paso 500)

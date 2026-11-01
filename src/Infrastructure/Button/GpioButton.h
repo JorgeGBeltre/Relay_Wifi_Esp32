@@ -5,7 +5,7 @@
 
 namespace relay::infra {
 
-// Máquina de estados del botón físico verificada en ingeniería inversa de Sonoff (0x40101E00 / 0x40233358):
+// Máquina de estados del botón físico:
 // - Muestreo periódico de 25 ms por tick
 // - Filtro antirrebote de 2 ticks (50 ms) tanto en presión como en liberación
 // - Disparo inmediato de LongPress al alcanzar 200 ticks (5,000 ms) sin esperar a que el usuario suelte el botón

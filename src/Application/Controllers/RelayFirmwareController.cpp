@@ -86,18 +86,19 @@ void RelayFirmwareController::onMqttConnected() {
     telemetry_.publishEvent("MQTT_CONNECTED", "Conexión MQTTS segura establecida");
     telemetry_.requestCurrentStates();
     telemetry_.publishStatus();
+    lastStatusPublishMs_ = clock_.nowMs();
 }
 
 void RelayFirmwareController::tick() {
     const unsigned long now = clock_.nowMs();
 
-    // 1. Actualizar patrón SLED (base de 100 ms, Sonoff 0x4023C8D4)
+    // 1. Actualizar patrón del indicador LED (base de 100 ms)
     indicator_.update();
 
     // 2. El botón físico siempre es prioritario (Offline-First, incluso durante OTA o reconexión)
     handleButtonEvents();
 
-    // 3. Ejecutar guardado diferido en NVS (150 ms tras última conmutación si StartupMode::Stay, 0x40232DDD)
+    // 3. Ejecutar guardado diferido en NVS (150 ms tras última conmutación si StartupMode::Stay)
     relays_.flushDeferredSave(now);
 
     // 4. Evaluar temporizador one-shot de Modo Pulso (Inching)
@@ -109,7 +110,13 @@ void RelayFirmwareController::tick() {
         if (onStateChangeCb_) onStateChangeCb_();
     }
 
-    // 5. Evaluar hasta 8 temporizadores programados (Once, Repeat, Duration) una vez por segundo
+    // 5. Sincronizar NTP apenas haya enlace Wi-Fi y evaluar hasta 8 temporizadores programados una vez por segundo
+    if (connectivity_.network().isConnected() &&
+        (lastTimeSyncMs_ == 0 || (now - lastTimeSyncMs_) >= TIME_SYNC_INTERVAL_MS)) {
+        lastTimeSyncMs_ = now;
+        timeProvider_.sync();
+    }
+
     if (timerScheduler_) {
         const uint32_t epochSec = timeProvider_.epochSeconds();
         if (epochSec > 1000000000U && epochSec != lastEvaluatedEpochSec_) {
@@ -157,11 +164,6 @@ void RelayFirmwareController::tick() {
         if (now - lastStatusPublishMs_ >= STATUS_INTERVAL_MS) {
             lastStatusPublishMs_ = now;
             telemetry_.publishStatus();
-        }
-
-        if (now - lastTimeSyncMs_ >= TIME_SYNC_INTERVAL_MS) {
-            lastTimeSyncMs_ = now;
-            timeProvider_.sync();
         }
     }
 }

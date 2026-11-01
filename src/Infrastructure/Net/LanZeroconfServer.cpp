@@ -50,6 +50,7 @@ void LanZeroconfServer::startServer() {
     }
 
     registerEndpoint("/zeroconf/switch");
+    registerEndpoint("/zeroconf/switches");
     registerEndpoint("/zeroconf/startup");
     registerEndpoint("/zeroconf/pulse");
     registerEndpoint("/zeroconf/sled");
@@ -180,7 +181,7 @@ void LanZeroconfServer::dispatchZeroconf(const char* uri, const String& rawBody,
 
     const unsigned long now = millis();
 
-    if (std::strcmp(uri, "/zeroconf/switch") == 0) {
+    if (std::strcmp(uri, "/zeroconf/switch") == 0 || std::strcmp(uri, "/zeroconf/switches") == 0) {
         const char* sw = dataObj["switch"];
         if (!sw && dataObj["switches"].is<JsonArray>()) {
             sw = dataObj["switches"][0]["switch"];
@@ -309,6 +310,10 @@ void LanZeroconfServer::dispatchZeroconf(const char* uri, const String& rawBody,
 
             const char* doSw = item["do"]["switch"] | "off";
             t.targetAction = (std::strcmp(doSw, "on") == 0);
+            const char* startSw = item["startDo"]["switch"] | "on";
+            const char* endSw = item["endDo"]["switch"] | "off";
+            t.startAction = (std::strcmp(startSw, "on") == 0);
+            t.endAction = (std::strcmp(endSw, "on") == 0);
             t.targetEpochSec = item["at"] | 0U;
             t.weekdaysMask = item["weekdays"] | 0x7FU;
             t.hourUtc = item["hour"] | 0U;

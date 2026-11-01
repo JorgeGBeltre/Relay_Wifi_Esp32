@@ -6,7 +6,7 @@
 namespace relay::domain {
 
 /**
- * @brief Modo de arranque del relé tras un corte de energía (Sonoff 0x40232C80):
+ * @brief Modo de arranque del relé tras un corte de energía:
  * - Off:  Arranca siempre apagado (por defecto).
  * - On:   Arranca siempre encendido.
  * - Stay: Restaura el último estado persistido en NVS (con escritura diferida de 150 ms).
@@ -36,7 +36,7 @@ inline StartupMode startupModeFromString(const std::string& str) {
  * @brief Entidad pura de dominio que contiene la configuración del dispositivo.
  * Desacoplada de frameworks o hardware para permitir compilación y pruebas en host.
  * Incluye campos para identificación de hardware (Device ID + Device Key), vinculación a cuenta (Bind Token)
- * y comportamiento Sonoff (StartupMode, Inching/Pulse, SLED Online).
+ * y comportamiento operativo (StartupMode, Inching/Pulse, SLED Online).
  */
 struct DeviceConfig {
     std::string wifiSsid;

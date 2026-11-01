@@ -6,7 +6,7 @@
 namespace relay::infra {
 
 /**
- * @brief Generador de patrones no bloqueante para el LED de estado (SLED) con base de 100 ms (Sonoff 0x4023C8D4):
+ * @brief Generador de patrones no bloqueante para el LED de estado (SLED) con base de 100 ms:
  * - Disconnected:  1000 ms ON / 1000 ms OFF (Buscando Wi-Fi)
  * - Connecting:    200 ms ON  / 1800 ms OFF (1 destello corto cada 2 s al conectar al broker MQTTv5)
  * - QuickPairing:  100 ms ON, 100 ms OFF, 100 ms ON, 700 ms OFF (2 destellos rápidos + pausa)

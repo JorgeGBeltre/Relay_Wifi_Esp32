@@ -8,7 +8,7 @@
 enum class QuickPairingResult : uint8_t {
     Provisioned       = 0, // Credenciales recibidas por BLE GATT o por SmartConfig (ESP-Touch/AirKiss)
     SwitchToSoftAp    = 1, // 2ª pulsación larga de 5.0 s -> Pasar a SoftAP Compatible (VESIS-<ChipID>)
-    CancelledByButton = 2, // Pulsación corta -> Salir de modo emparejamiento (Sonoff 0x40233450)
+    CancelledByButton = 2, // Pulsación corta -> Salir de modo emparejamiento
     Timeout           = 3  // Tiempo agotado sin recibir configuración
 };
 

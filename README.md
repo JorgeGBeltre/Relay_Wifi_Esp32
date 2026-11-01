@@ -1,6 +1,6 @@
 # Relay-Wifi
 
-**Smart Relay Controller for ESP32 with Clean Architecture, Native MQTT 5.0, Bluetooth Low Energy (BLE) Provisioning, and Secure Chunked OTA**
+**Smart Relay Controller for ESP32 with Clean Architecture, Native MQTT 5.0, Quick Pairing (BLE GATT + SmartConfig), Local LAN HTTP Control, and Secure Chunked OTA**
 
 [![Platform](https://img.shields.io/badge/platform-ESP32-blue)](https://www.espressif.com/en/products/socs/esp32)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-green)](https://en.cppreference.com/w/cpp/17)
@@ -12,9 +12,9 @@
 
 ---
 
-**Relay-Wifi** is an open-source firmware for ESP32 smart switches and relays, designed with Clean Architecture, MQTT 5.0, and BLE provisioning. Engineered following strict **Clean Architecture (Hexagonal / Onion Architecture)** principles, the project completely decouples core business and domain rules from external drivers, frameworks, and hardware peripherals.
+**Relay-Wifi** is an open-source firmware for ESP32 smart switches and relays, designed in **Clean Architecture** with native **MQTT 5.0**, **Quick Pairing (BLE GATT + Wi-Fi SmartConfig)**, **Local LAN HTTP Control (`/zeroconf/*`)**, and **Chunked OTA**. Engineered following strict **Clean Architecture (Hexagonal / Onion Architecture)** principles, the project completely decouples core business and domain rules from external drivers, frameworks, and hardware peripherals.
 
-The system natively integrates **[ESP32_MQTTv5](https://github.com/JorgeGBeltre/ESP32_MQTTv5)** for secure, session-aware MQTT 5.0 telemetry and command handling, **[MQTTOTAv5](https://github.com/JorgeGBeltre/MQTTOTAv5)** for chunked Over-The-Air updates with SHA-256 integrity verification, and **Bluetooth Low Energy (BLE) Provisioning** powered by **[NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino)** for frictionless onboarding via mobile apps.
+The system natively integrates **[ESP32_MQTTv5](https://github.com/JorgeGBeltre/ESP32_MQTTv5)** for secure, session-aware MQTT 5.0 telemetry and command handling, **[MQTTOTAv5](https://github.com/JorgeGBeltre/MQTTOTAv5)** for chunked Over-The-Air updates with SHA-256 integrity verification, **Quick Pairing** powered by **[NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino)** plus **ESP-Touch / AirKiss**, and a **SoftAP Captive Portal (`VESIS-<ChipID>`)** for frictionless device onboarding.
 
 ---
 
@@ -29,8 +29,8 @@ The system natively integrates **[ESP32_MQTTv5](https://github.com/JorgeGBeltre/
 - [Configuration & Placeholders](#configuration--placeholders)
 - [Bluetooth BLE Provisioning & Mobile App Integration](#bluetooth-ble-provisioning--mobile-app-integration)
   - [Overview & Workflow](#overview--workflow)
-  - [Step-by-Step Onboarding & Account Claiming Lifecycle](#step-by-step-onboarding--account-claiming-lifecycle)
   - [GATT Service & Characteristics Layout](#gatt-service--characteristics-layout)
+  - [Step-by-Step Onboarding & Account Claiming Lifecycle](#step-by-step-onboarding--account-claiming-lifecycle)
   - [Standard Bluetooth Device Information Service (0x180A)](#standard-bluetooth-device-information-service-0x180a)
   - [Provisioning via Individual Characteristics](#provisioning-via-individual-characteristics)
   - [Provisioning via Unified Data Frames (BLE Frames)](#provisioning-via-unified-data-frames-ble-frames)
@@ -40,6 +40,9 @@ The system natively integrates **[ESP32_MQTTv5](https://github.com/JorgeGBeltre/
   - [Topic Topology](#topic-topology)
   - [Command Handling](#command-handling)
   - [JSON Telemetry & Status Payloads](#json-telemetry--status-payloads)
+- [Local LAN HTTP Control (/zeroconf/*) & Scheduled Timers](#local-lan-http-control-zeroconf--scheduled-timers)
+  - [Added Application & Infrastructure Functions](#added-application--infrastructure-functions)
+  - [Local LAN HTTP Endpoints (:8081)](#local-lan-http-endpoints-8081)
 - [Over-The-Air (OTA) Updates](#over-the-air-ota-updates)
 - [Physical Controls & Dual Provisioning Portals](#physical-controls--dual-provisioning-portals)
 - [Status Indicator (LED)](#status-indicator-led)
@@ -49,7 +52,7 @@ The system natively integrates **[ESP32_MQTTv5](https://github.com/JorgeGBeltre/
   - [Host Compilation with CMake](#host-compilation-with-cmake)
 - [Backend Implementation](#backend-implementation)
 - [Broker Compatibility](#broker-compatibility)
-- [License](#-license)
+- [License](#license)
 - [Contact](#contact)
 - [Support](#support)
 
@@ -62,29 +65,35 @@ The system natively integrates **[ESP32_MQTTv5](https://github.com/JorgeGBeltre/
 | **Clean Architecture** | Pure Domain (zero-dependency C++17 entities/interfaces), decoupled Application services, isolated Infrastructure drivers, and unified Presentation composition root |
 | **Native MQTT 5.0** | Powered by `ESP32_MQTTv5` — TLS encryption (`WiFiClientSecure`), keep-alive, sessions, properties, and JSON Last Will & Testament (LWT) |
 | **Secure OTA Updates** | Powered by `MQTTOTAv5` — chunked binary transfers over MQTT 5.0, SHA-256 hash checks, automatic rollback protection, and non-blocking restarts |
-| **Bluetooth (BLE) Provisioning** | Powered by `NimBLE-Arduino` — Sonoff/eWeLink-style onboarding for WiFi & MQTT/cloud server credentials via mobile app frames or individual GATT characteristics, with hardware self-identification (Device ID + factory Device Key) and account claim tokens |
-| **Dual Control Flow** | Physical button support (debounced short press for relay toggle) and remote cloud actuation (state synchronization, get/set commands) |
-| **Dual Provisioning Portals** | Primary BLE Provisioning with automatic fallback to SoftAP Web Portal (`WiFiManager` / `VESIS-<ChipID>`) on timeout or button long-press |
-| **NVS Persistent Storage** | Dynamic credentials and IDs persisted non-volatilely via `Preferences` in the `relay-config` namespace |
-| **Non-blocking LED** | Status indicator LED driven by non-blocking timer loops (Fast Blink: Disconnected/Provisioning, Slow Blink: Connecting, Solid ON: Operational) |
-| **NTP Synchronization** | Accurate UTC timestamping (ISO 8601 `YYYY-MM-DDTHH:MM:SS.mmmZ`) synchronized with public NTP pools (`pool.ntp.org`, `time.nist.gov`) |
+| **Quick Pairing (BLE + SmartConfig)** | Powered by `NimBLE-Arduino` + `ESP-Touch / AirKiss` (`runQuickPairing`) — simultaneous BLE GATT (`RELAY-<DeviceID>`) and Wi-Fi SmartConfig onboarding via mobile app frames or individual GATT characteristics, with hardware self-identification (`Device ID` + factory `Device Key`) and account claim tokens (`Bind Token`) |
+| **2-Stage Pairing & SoftAP `VESIS-<ChipID>`** | Stage 1 launches Quick Pairing (`runPairingWorkflow`) on a `5 s` long press; a 2nd `5 s` long press (or initial boot timeout) transitions to the `VESIS-<ChipID>` SoftAP captive portal (`WifiApProvisioningPortal::startPortal`), while a short press exits pairing mode |
+| **Power-On State (`StartupMode`) & Deferred Save** | Immediate `< 20 ms` Offline-First boot restoration (`initWithStartupConfig`) supporting `Off`, `On`, and `Stay` modes (`setStartupMode`), with `150 ms` deferred NVS writes (`flushDeferredSave`) to protect Flash memory |
+| **Inching / Pulse Mode** | Configurable auto-shutoff timer (`configurePulse`, `updatePulseTimer`) from `500 ms` to `36,000,000 ms` in `500 ms` steps |
+| **Scheduled Timers (`TimerSchedulerService`)** | Up to `8` persistent NVS timers (`Once`, `Repeat`, `Duration`) evaluated once per second against UTC epoch time (`evaluate`, `upsertTimer`, `clearAllTimers`, `loadFromStorage`) |
+| **Local LAN HTTP & AES-128-CBC (`LanZeroconfServer`)** | Local HTTP server on port `8081` (`/zeroconf/*`) + mDNS discovery (`notifyMdnsStateChange`) supporting plain JSON and `AES-128-CBC` (`PKCS#7`, `MD5(deviceKey)`) encrypted payloads via `CryptoUtils` |
+| **Dual Control Flow** | Physical button support (`25 ms` sample ticks, `50 ms` press/release debounce, immediate `5,000 ms` long-press detection while held) and remote MQTT 5.0 / LAN actuation |
+| **NVS Persistent Storage** | Dynamic credentials, `StartupMode`, pulse settings, `sledOnline`, and scheduled timers persisted non-volatilely via `Preferences` in the `relay-config` namespace |
+| **Non-blocking Multi-Pattern LED (`GpioIndicator`)** | `100 ms` base-tick LED pattern state machine (`Disconnected`, `Connecting`, `QuickPairing`, `CompatibleAp`, `OtaProgress`, `Operational`) with persistent `sledOnline` (`setSledOnline`) configuration |
+| **NTP Synchronization** | Accurate UTC timestamping (ISO 8601 `YYYY-MM-DDTHH:MM:SS.mmmZ` and `epochSeconds()`) synchronized with public NTP pools (`pool.ntp.org`, `time.nist.gov`) |
 | **Dual Build Toolchain** | Full target firmware builds via PlatformIO (`platformio.ini`) and pure host test compilation via CMake (`CMakeLists.txt`) |
 
 ---
 
 ## Architecture
 
-The project adheres to Robert C. Martin's Clean Architecture pattern, engineered for modularity, testability, and clean separation of concerns.
+The project is structured in **Clean Architecture**, engineered for modularity, testability, and clean separation of concerns.
 
 ### Layer Separation
 
 1. **Domain Layer (`src/Domain/`)**:
-   - Contains pure C++17 entities (`RelayState`, `DeviceIdentity`, `SystemMetrics`, `DeviceEvent`, `DeviceConfig`) and abstract interfaces (`IRelayController`, `IButtonHandler`, `ITelemetryTransport`, `IOtaService`, `INetworkLink`, `IIndicator`, `ILogger`, `IClock`, `ITimeProvider`, `IDeviceRepository`, `ISystemControl`, `IConfigRepository`, `IProvisioningPortal`).
+   - Contains pure C++17 entities (`RelayState`, `DeviceIdentity`, `SystemMetrics`, `DeviceEvent`, `DeviceConfig`, `StartupMode`, `ScheduledTimer`, `TimerType`) and abstract interfaces (`IRelayController`, `IButtonHandler`, `ITelemetryTransport`, `IOtaService`, `INetworkLink`, `IIndicator`, `ILogger`, `IClock`, `ITimeProvider`, `IDeviceRepository`, `ISystemControl`, `IConfigRepository`, `IProvisioningPortal`).
    - Contains **zero** external library or Arduino/ESP-IDF dependencies.
 2. **Application Layer (`src/Application/`)**:
    - Implements use cases and business orchestration:
-     - `RelayFirmwareController`: finite state machine managing system transitions (`Connecting` → `Operational`), button events, and command routing.
-     - `RelayService`: manages multiple physical and virtual relay states, desired/current state delta matching, and toggles.
+     - `RelayFirmwareController`: finite state machine managing system transitions (`Connecting` → `Operational`), Offline-First button events (`handleButtonEvents`), deferred NVS flushes, pulse expiration, scheduled timer evaluation, indicator status updates (`updateIndicatorForConnectivity`), local state change callbacks (`setOnLocalStateChangeCallback`), and command routing (`processCommand`).
+     - `RelayService`: manages physical and virtual relay states, boot restoration (`initWithStartupConfig`), power-on mode (`setStartupMode`, `getStartupMode`), `150 ms` deferred NVS persistence (`flushDeferredSave`, `hasPendingDeferredSave`), and Inching/Pulse mode (`configurePulse`, `updatePulseTimer`, `isPulseEnabled`, `getPulseWidthMs`, `isPulseActive`).
+     - `TimerSchedulerService`: manages up to `8` persistent scheduled timers (`loadFromStorage`, `upsertTimer`, `clearAllTimers`, `getActiveTimerCount`, `evaluate`) for `Once`, `Repeat`, and `Duration` schedules.
+     - `CryptoUtils`: pure C++17 cryptographic utilities (`computeMd5`, `deriveLanKey`, `aes128CbcEncryptPkcs7`, `aes128CbcDecryptPkcs7`, `base64Encode`, `base64Decode`, `decryptZeroconfPayload`, `encryptZeroconfPayload`).
      - `ConnectivityService`: coordinates network links (WiFi) and MQTT 5.0 transports.
      - `TelemetryService`: formats and dispatches periodic status, event envelopes, and switch states.
      - `MqttTopics`: pure string topic generation based on device identity.
@@ -92,19 +101,19 @@ The project adheres to Robert C. Martin's Clean Architecture pattern, engineered
 3. **Infrastructure Layer (`src/Infrastructure/`)**:
    - Implements concrete domain interfaces using hardware drivers and external libraries:
      - `Actuators`: `GpioRelay` (GPIO pin control).
-     - `Button`: `GpioButton` (non-blocking debouncing and long press detector).
-     - `Config`: `config.h` (credentials and timing), `BoardConfig.h` (pin mapping), `nvs_config.h`/`cpp` (Preferences NVS persistence), and `NvsConfigRepository.h` (`IConfigRepository` adapter).
-     - `Indicator`: `GpioIndicator` (non-blocking status LED).
+     - `Button`: `GpioButton` (falling-edge ISR + `25 ms` periodic tick sampler, `50 ms` press/release debounce, immediate `5,000 ms` `LongPress` emission while held, and `isPhysicallyPressed`).
+     - `Config`: `config.h` (credentials and timing), `BoardConfig.h` (pin mapping), `nvs_config.h`/`cpp` (`Preferences` NVS persistence including `saveLastRelayStateNvs`, `saveStartupModeNvs`, `savePulseConfigNvs`, `saveSledOnlineNvs`, `saveTimersNvs`, `loadTimersNvs`), and `NvsConfigRepository.h` (`IConfigRepository` adapter).
+     - `Indicator`: `GpioIndicator` (`100 ms` non-blocking LED pattern state machine and `setSledOnline` / `isSledOnline`).
      - `Logging`: `SerialLogger` (serial logging output).
      - `Messaging`: `mqtt_client` and `Mqttv5Transport` (wrapping `ESP32_MQTTv5`).
-     - `Net`: `WifiLink` and `NetworkClient` (WiFiClientSecure with TLS and dynamic credentials).
+     - `Net`: `WifiLink` (non-blocking background station association), `NetworkClient` (`WiFiClientSecure` with TLS), and `LanZeroconfServer` (HTTP `:8081` `/zeroconf/*` server + mDNS discovery via `loop`, `notifyMdnsStateChange`, `startServer`, `stopServer`, `dispatchZeroconf`).
      - `Ota`: `ota_manager` and `Mqttv5OtaService` (wrapping `MQTTOTAv5`).
-     - `Provisioning`: `ble_provisioning.h`/`cpp` (NimBLE GATT server & frame parser), `ProvisioningPortals.h`, and `WifiApProvisioningPortal.h` (`WiFiManager` portal).
+     - `Provisioning`: `ble_provisioning.h`/`cpp` (`runQuickPairing`, `runBLEProvisioning`), `ProvisioningPortals.h` (`BleProvisioningPortal::runInteractive`), and `WifiApProvisioningPortal.h` (`WifiApProvisioningPortal::startPortal` for `VESIS-<ChipID>`).
      - `Serialization`: `ArduinoJsonPayloadSerializer` (ArduinoJson v6 schema formatter).
      - `System`: `EspDeviceRepository` (eFuse MAC, chip model, heap) and `EspSystemControl` (reboot).
-     - `Time`: `ArduinoClock` and `NtpTimeProvider` (SNTP + ISO 8601 formatting).
+     - `Time`: `ArduinoClock` and `NtpTimeProvider` (SNTP + ISO 8601 formatting + `epochSeconds()`).
 4. **Presentation Layer (`src/Presentation/`)**:
-   - `main.cpp`: Composition Root. Instantiates concrete infrastructure adapters, injects dependencies into application services, registers button handlers and callbacks, and exposes standard `setup()` and `loop()` entry points.
+   - `main.cpp`: Composition Root. Restores relay state immediately at boot (`initWithStartupConfig`), coordinates the 2-stage pairing workflow (`runPairingWorkflow`), wires `TimerSchedulerService` and `LanZeroconfServer`, and exposes `setup()` and `loop()`.
 
 ### Directory Tree
 
@@ -122,6 +131,7 @@ Relay-Wifi/
     │   │   ├── DeviceEvent.h
     │   │   ├── DeviceIdentity.h
     │   │   ├── RelayState.h
+    │   │   ├── ScheduledTimer.h
     │   │   └── SystemMetrics.h
     │   └── Interfaces/
     │       ├── IButtonHandler.h
@@ -150,10 +160,14 @@ Relay-Wifi/
     │   └── Services/
     │       ├── ConnectivityService.h
     │       ├── ConnectivityService.cpp
+    │       ├── CryptoUtils.h
+    │       ├── CryptoUtils.cpp
     │       ├── RelayService.h
     │       ├── RelayService.cpp
     │       ├── TelemetryService.h
-    │       └── TelemetryService.cpp
+    │       ├── TelemetryService.cpp
+    │       ├── TimerSchedulerService.h
+    │       └── TimerSchedulerService.cpp
     ├── Infrastructure/
     │   ├── Actuators/
     │   │   ├── GpioRelay.h
@@ -177,6 +191,8 @@ Relay-Wifi/
     │   │   ├── Mqttv5Transport.h
     │   │   └── Mqttv5Transport.cpp
     │   ├── Net/
+    │   │   ├── LanZeroconfServer.h
+    │   │   ├── LanZeroconfServer.cpp
     │   │   ├── NetworkClient.h
     │   │   ├── NetworkClient.cpp
     │   │   ├── WifiLink.h
@@ -214,8 +230,8 @@ Default board wiring configured in `src/Infrastructure/Config/BoardConfig.h`:
 | Peripheral | GPIO Pin | Configuration | Function |
 |---|---|---|---|
 | **Relay 1** | `GPIO 4` | Output (Active High) | Primary relay output actuator |
-| **Button 1** | `GPIO 0` | Input (`INPUT_PULLUP`) | Physical toggle (<3s) / BLE & SoftAP portal (>3s) |
-| **Status LED** | `GPIO 2` | Output (Active High) | WiFi, BLE, and connection status indicator |
+| **Button 1** | `GPIO 0` | Input (`INPUT_PULLUP`) | Physical toggle (`50 ms` debounce) / Quick Pairing & SoftAP `VESIS-<ChipID>` (`5,000 ms` long press) |
+| **Status LED** | `GPIO 2` | Output (Active High) | Multi-pattern WiFi, Quick Pairing, SoftAP, OTA, and connection status indicator |
 
 ---
 
@@ -247,25 +263,24 @@ constexpr int MQTT_SOCKET_TIMEOUT = 30;
 constexpr size_t MQTT_BUFFER_SIZE = 4096;
 constexpr unsigned long MQTT_KEEP_ALIVE = 60;
 
-inline const char* root_ca_pem = "-----BEGIN CERTIFICATE-----
-" "YOUR_SSL_CERTIFICATE_HERE
-" "-----END CERTIFICATE-----
-";
+inline const char* root_ca_pem = "-----BEGIN CERTIFICATE-----\n"
+"YOUR_SSL_CERTIFICATE_HERE\n"
+"-----END CERTIFICATE-----\n";
 ```
 
-> **Note**: Dynamic credentials provided via BLE Provisioning or SoftAP are stored non-volatilely in NVS (`relay-config`) and take precedence over static defaults in `config.h`. If `root_ca_pem` contains the placeholder string or is empty, the underlying network client automatically switches to `setInsecure()` mode for self-signed certificates.
+> **Note**: Dynamic credentials provided via Quick Pairing (BLE / SmartConfig) or SoftAP (`VESIS-<ChipID>`) are stored non-volatilely in NVS (`relay-config`) and take precedence over static defaults in `config.h`. If `root_ca_pem` contains the placeholder string or is empty, the underlying network client automatically switches to `setInsecure()` mode for self-signed certificates.
 
 ---
 
 ## Bluetooth BLE Provisioning & Mobile App Integration
 
-The system implements on-demand Bluetooth Low Energy (BLE) provisioning engineered specifically for smart switches, mirroring the hardware identity and account-binding architecture of Sonoff / eWeLink devices.
+The system implements on-demand **Quick Pairing** (`runQuickPairing`), combining Bluetooth Low Energy (BLE) GATT provisioning and **Wi-Fi SmartConfig (`ESP-Touch / AirKiss`)** simultaneously, engineered specifically for smart switches with hardware identity and account-binding support.
 
 This channel is focused strictly on:
 1. **Device Self-Identification**: The switch exposes its factory `Device ID` (unique hardware serial number) and `Device Key` (`apikey` private cryptographic key) to allow mobile apps to authenticate hardware authenticity.
-2. **Credential Provisioning**: Injects WiFi credentials (`ssid`, `password`) and cloud server / MQTT broker endpoint (`server`, `port`, `account`, `password`, `ota_key`).
+2. **Credential Provisioning**: Injects WiFi credentials (`ssid`, `password`), cloud server / MQTT broker endpoint (`server`, `port`, `account`, `password`, `ota_key`), and optional device behavior settings (`startup`, `pulse`, `pulseWidth`, `sledOnline`).
 3. **Account Binding (Claim Token)**: Injects the user's active session claim token (`bind_token`) to permanently bind the switch to the user's profile upon first cloud connection.
-4. **Data Frame Handling**: Accepts both individual GATT characteristic writes and unified JSON or Key=Value data frames ("tramas").
+4. **Data Frame Handling**: Accepts individual GATT characteristic writes, unified JSON or `Key=Value` data frames ("tramas"), or SmartConfig (`ESP-Touch / AirKiss`) broadcast frames.
 
 ### Overview & Workflow
 
@@ -296,7 +311,7 @@ This channel is focused strictly on:
 | Characteristic | UUID | Permissions | Description | Example / Default Value |
 |---|---|---|---|---|
 | **Device ID** | `aaaaaaaa-bbbb-cccc-dddd-000000000008` | `READ` / `WRITE` | Unique hardware identifier ("device identity card") presented to servers and app | `0000A1B2C3D4` or eFuse-derived |
-| **Device Key** | `aaaaaaaa-bbbb-cccc-dddd-000000000015` | `READ` | Factory secret/private hardware cryptographic key (Sonoff `apikey`/`devicekey` style) to verify authenticity | Unique cryptographic UUID |
+| **Device Key** | `aaaaaaaa-bbbb-cccc-dddd-000000000015` | `READ` | Factory secret/private hardware cryptographic key (`apikey`/`devicekey`) to verify authenticity and derive LAN keys | Unique cryptographic UUID |
 | **Bind Token** | `aaaaaaaa-bbbb-cccc-dddd-000000000016` | `READ` / `WRITE` | User account claim/binding token injected by mobile app to associate the switch with user profile | `"claim_tok_9876543210"` |
 | **WiFi SSID** | `aaaaaaaa-bbbb-cccc-dddd-000000000012` | `READ` / `WRITE` | 2.4 GHz wireless network SSID | `"MyHome_Fiber"` |
 | **WiFi Password** | `aaaaaaaa-bbbb-cccc-dddd-000000000013` | `READ` / `WRITE` | WPA/WPA2 network passphrase | `"SecretPassword123"` |
@@ -309,11 +324,11 @@ This channel is focused strictly on:
 | **Save / ACK** | `aaaaaaaa-bbbb-cccc-dddd-000000000099` | `WRITE` / `READ` / `NOTIFY` | Save trigger into NVS and ACK notification (`"OK"`). Also accepts direct frame writes | `"READY"` -> Notifies `"OK"` |
 
 > [!NOTE]
-> **Dedicated Smart Switch Architecture**: This BLE provisioning implementation is purpose-built for WiFi smart switches. It exclusively configures WiFi credentials, server/broker endpoints, hardware identification (Device ID and factory Device Key), and user account claiming (Bind Token).
+> **Dedicated Smart Switch Architecture**: This BLE provisioning implementation is purpose-built for WiFi smart switches. It configures WiFi credentials, server/broker endpoints, hardware identification (Device ID and factory Device Key), user account claiming (Bind Token), and startup/pulse parameters.
 
 ### Step-by-Step Onboarding & Account Claiming Lifecycle
 
-The provisioning flow mirrors the exact security and association lifecycle of Sonoff / eWeLink smart switches through a 7-step deterministic process:
+The provisioning flow executes a 7-step deterministic security and association lifecycle:
 
 #### Step 1: Hardware Identity Generation & Initialization
 1. Upon entering provisioning mode, the firmware inspects the non-volatile storage (`NVS`, namespace `relay-config`).
@@ -323,15 +338,16 @@ The provisioning flow mirrors the exact security and association lifecycle of So
    snprintf(buf, sizeof(buf), "%04X%08X", (uint16_t)(chipId >> 32), (uint32_t)chipId);
    ```
    This serves as the unique hardware serial number ("cédula de identidad") recognized by mobile apps and cloud servers.
-3. **Factory Device Key Generation**: If no `device_key` is stored, the firmware derives a factory-grade UUID v4 cryptographic key using the hardware MAC entropy, bit shifting, and XOR masking (`%08X-%04X-4%03X-%04X-%012llX`). This key acts as the factory private symmetric key (`apikey` / `devicekey`) used for LAN-mode encryption and hardware authenticity verification.
-4. Both keys are permanently stored in NVS and will survive reboots and OTA updates.
+3. **Factory Device Key Generation**: If no `device_key` is stored, the firmware derives a factory-grade UUID v4 cryptographic key using the hardware MAC entropy, bit shifting, and XOR masking (`%08X-%04X-4%03X-%04X-%012llX`). This key acts as the factory private symmetric key (`apikey` / `devicekey`) used for LAN-mode encryption (`deriveLanKey`) and hardware authenticity verification.
+4. Both keys are permanently stored in NVS and survive reboots and OTA updates.
 
-#### Step 2: BLE Stack & GATT Server Startup
-1. The firmware sets the BLE local advertising name to `RELAY-<DeviceID>` (e.g., `RELAY-0000A1B2C3D4`).
-2. The NimBLE stack initializes with an extended MTU of **512 bytes**, allowing high-throughput JSON frame transfers without packet truncation.
-3. The server starts the standard **Bluetooth SIG Device Information Service** (`0x180A`) for universal mobile OS compatibility.
-4. The server creates the primary **Relay Provisioning Service** (`12345678-1234-1234-1234-123456789abc`) and registers all credential and identity characteristics.
-5. Advertising begins with active scan response enabled, remaining active for the duration of the timeout period (default: 60,000 ms).
+#### Step 2: BLE Stack, GATT Server & SmartConfig Startup
+1. The firmware starts **Wi-Fi SmartConfig (`ESP-Touch / AirKiss`)** in station mode (`WiFi.beginSmartConfig()`).
+2. In parallel, the firmware sets the BLE local advertising name to `RELAY-<DeviceID>` (e.g., `RELAY-0000A1B2C3D4`).
+3. The NimBLE stack initializes with an extended MTU of **512 bytes**, allowing high-throughput JSON frame transfers without packet truncation.
+4. The server starts the standard **Bluetooth SIG Device Information Service** (`0x180A`) for universal mobile OS compatibility.
+5. The server creates the primary **Relay Provisioning Service** (`12345678-1234-1234-1234-123456789abc`) and registers all credential and identity characteristics.
+6. Advertising begins with active scan response enabled while the status LED emits the `QuickPairing` double-blink cadence (`100 ms ON, 100 ms OFF, 100 ms ON, 700 ms OFF`).
 
 #### Step 3: Mobile App Scanning & Hardware Authenticity Verification
 1. The user opens the mobile application (where they have already authenticated into their cloud user account).
@@ -343,7 +359,7 @@ The provisioning flow mirrors the exact security and association lifecycle of So
 4. The mobile app validates the cryptographic `Device Key` against cloud authority records to certify that the physical hardware is genuine before prompting the user for network credentials.
 
 #### Step 4: Credential & Account Claim Token Injection
-The mobile app injects the required configuration into the switch. The firmware supports three interchangeable injection workflows:
+The mobile app injects the required configuration into the switch. The firmware supports four interchangeable injection workflows:
 - **Method A (Unified JSON Frame)**: The app sends a single JSON payload to `CHAR_FRAME_JSON_UUID` (`...0014`) or `CHAR_SAVE_UUID` (`...0099`) containing WiFi credentials, server endpoint, user account, and the active session claim token (`bind_token`).
 - **Method B (Delimited Key=Value Frame)**: The app sends a compact delimited string (`ssid=...;pass=...;server=...;port=...;account=...;token=...`) formatted with `;`, `&`, or newlines.
 - **Method C (Individual GATT Characteristics)**: The app writes to dedicated characteristics sequentially:
@@ -353,26 +369,28 @@ The mobile app injects the required configuration into the switch. The firmware 
   - `CHAR_PORT_UUID` (`...0005`): Server port (e.g., `8883` TLS or `1883`).
   - `CHAR_MQTTUSER_UUID` (`...0006`): User account identifier or email address.
   - `CHAR_BINDTOKEN_UUID` (`...0016`): The account claim token generated by the cloud for the logged-in user.
+- **Method D (Wi-Fi SmartConfig `ESP-Touch / AirKiss`)**: Broadcasts SSID and passphrase over 2.4 GHz UDP frames captured directly by `WiFi.smartConfigDone()`.
 
 #### Step 5: NVS Flash Persistence & BLE ACK Handshake
-1. Once all parameters are received (or upon receiving `"SAVE"` on `CHAR_SAVE_UUID` `...0099`), the firmware commits the configuration to flash memory using the `Preferences` API under the `relay-config` namespace.
+1. Once all parameters are received (or upon receiving `"SAVE"` on `CHAR_SAVE_UUID` `...0099`), the firmware commits the configuration to flash memory using `saveConfig()` under the `relay-config` namespace.
 2. The internal flag `_configSaved` is set to `true`.
 3. The firmware immediately triggers a BLE notification with the payload `"OK"` on both `CHAR_SAVE_UUID` (`...0099`) and `CHAR_FRAME_JSON_UUID` (`...0014`).
 4. The mobile app receives the `"OK"` ACK and updates its UI to notify the user that provisioning succeeded.
 5. The firmware pauses for a 600 ms grace period to guarantee that the BLE ACK packet is completely transmitted over the air before shutting down the radio.
 
 #### Step 6: Controlled Reboot & Cloud Account Claiming
-1. The firmware stops BLE advertising, cleanly deinitializes the NimBLE stack (`NimBLEDevice::deinit(true)`), and reboots the ESP32.
+1. The firmware stops SmartConfig and BLE advertising, cleanly deinitializes the NimBLE stack (`NimBLEDevice::deinit(true)`), and reboots the ESP32.
 2. Upon restart, the firmware reads the newly saved credentials from NVS and initiates a station connection to the local WiFi access point.
-3. Once WiFi is connected, the device establishes a TLS connection to the configured cloud broker.
+3. Once WiFi is connected, the device establishes a TLS connection to the configured MQTT 5.0 broker.
 4. The switch reports its identity and claim payload (`Device ID`, `Device Key`, and `Bind Token`).
-5. The cloud backend validates that the `Bind Token` matches the user's active session, registers the switch's `Device ID` under that user's account, and locks the device so that no other user can claim it unless released by the owner.
-6. The switch is now fully operational, reporting status via MQTT 5.0 and listening for remote commands.
+5. The cloud backend validates that the `Bind Token` matches the user's active session and registers the switch's `Device ID` under that user's account.
+6. The switch is now operational, reporting status via MQTT 5.0 and listening for remote and local LAN commands.
 
-#### Step 7: Dual-Portal Fallback & Rescue Mode
-1. **Unprovisioned First Boot**: If no mobile app connects within 60 seconds of BLE advertising, the system automatically falls back to the SoftAP captive web portal (`VESIS-<ChipID>`).
-2. **Button Long-Press**: Holding GPIO 0 for >3 seconds at any time during operation relaunches the BLE provisioning portal with rapid LED flashing.
-3. **Boot Hold**: Powering up the board with the button depressed forces immediate entry into BLE provisioning.
+#### Step 7: 2-Stage Pairing & SoftAP `VESIS-<ChipID>` Fallback
+1. **Unprovisioned First Boot**: Starts in Quick Pairing (`runQuickPairing`) for 60 seconds; if no credentials are received, it transitions automatically to the SoftAP captive web portal (`VESIS-<ChipID>`, password `12345678`).
+2. **1st Button Long-Press (`5,000 ms`)**: Enters Stage 1 Quick Pairing (`BLE GATT` + `ESP-Touch / AirKiss`) for 180 seconds with the double-blink LED pattern.
+3. **2nd Button Long-Press (`5,000 ms` while in Quick Pairing)**: Transitions immediately to Stage 2 Compatible SoftAP (`VESIS-<ChipID>`, password `12345678`, `180 s`) with fast continuous LED blinking (`100 ms ON / 100 ms OFF`).
+4. **Short Press during Pairing**: Cancels the active pairing portal (`QuickPairingResult::CancelledByButton`) and resumes normal operation without losing existing settings.
 
 ---
 
@@ -405,7 +423,7 @@ Following the standard GATT characteristic workflow:
 
 For mobile apps preferring to send all parameters in a single transmission payload, the firmware supports two frame formats written to `CHAR_FRAME_JSON_UUID` (`...0014`) or `CHAR_SAVE_UUID` (`...0099`):
 
-#### Option A: JSON Frame (Full Account Binding)
+#### Option A: JSON Frame (Full Account Binding & Behavior Settings)
 
 ```json
 {
@@ -416,7 +434,11 @@ For mobile apps preferring to send all parameters in a single transmission paylo
   "account": "user@example.com",
   "bind_token": "claim_tok_9876543210abcdef",
   "device_id": "RELAY-0000A1B2C3D4",
-  "ota_key": "s3cr3t_k3y"
+  "ota_key": "s3cr3t_k3y",
+  "startup": "stay",
+  "pulse": "off",
+  "pulseWidth": 500,
+  "sledOnline": "on"
 }
 ```
 
@@ -425,11 +447,14 @@ For mobile apps preferring to send all parameters in a single transmission paylo
 - `wifi_pass` or `pass` or `password`
 - `mqtt_broker` or `broker` or `server`
 - `mqtt_port` or `port`
-- `account` or `user` or `user_id` or `account_id` or `email` or `mqtt_user`
+- `account` or `user` or `user_id` or `account_id` or `email` or `mqtt_user` or `api_key`
 - `bind_token` or `token` or `claim_token` or `account_token`
 - `device_key` or `devicekey` or `apikey`
 - `device_id` or `id` or `deviceid`
 - `ota_hmac_key` or `ota_key`
+- `startup` (`"off"`, `"on"`, `"stay"`)
+- `pulse` (`"on"`, `"off"`) and `pulseWidth` (`500..36000000`, step `500`)
+- `sledOnline` (`"on"`, `"off"`)
 
 #### Option B: Delimited Key=Value Frame
 
@@ -477,10 +502,11 @@ For seamless discovery and status tracking by the mobile app:
 
 ### Dual Provisioning Flow & Fallback Architecture
 
-Provisioning is governed by a fault-tolerant dual-portal architecture:
-1. **First Boot (Unprovisioned)**: The device automatically starts in BLE mode, advertising for 60 seconds. If no app connects, it falls back to the SoftAP rescue web portal (`VESIS-<ChipID>`).
-2. **Button Long-Press (> 3 seconds)**: At any point during runtime, holding the physical button triggers the BLE provisioning portal for 60 seconds with rapid status LED blinking. If timeout expires without receiving configuration, it automatically switches to the rescue SoftAP portal (180s).
-3. **Boot Hold**: Powering up the board while holding the button forces immediate entry into BLE provisioning mode.
+Provisioning is governed by a fault-tolerant 2-stage architecture (`runPairingWorkflow`):
+1. **First Boot (Unprovisioned)**: Starts in Quick Pairing (`runQuickPairing`: BLE GATT + SmartConfig) for 60 seconds. If no configuration is received, it falls back automatically to the SoftAP rescue web portal (`VESIS-<ChipID>`).
+2. **1st Button Long-Press (`5,000 ms`)**: At any point during runtime, holding the physical button for 5 seconds triggers Stage 1 Quick Pairing (`RELAY-<DeviceID>` BLE GATT + SmartConfig) for 180 seconds with the double-blink LED pattern.
+3. **2nd Button Long-Press (`5,000 ms`)**: Holding the physical button for 5 seconds while in Quick Pairing switches immediately to Stage 2 SoftAP (`WifiApProvisioningPortal::startPortal`, SSID `VESIS-<ChipID>`, password `12345678`, timeout `180 s`), exposing fields for WiFi SSID, WiFi Password, MQTT 5.0 Server, Port, API Key / Account, and Bind Token, and persisting them to NVS via `saveConfig()`.
+4. **Short Press Cancel**: Pressing the button briefly while in Quick Pairing or SoftAP exits pairing mode and returns to normal operation.
 
 ---
 
@@ -493,9 +519,9 @@ Topics are derived dynamically at runtime using the chip's unique eFuse MAC addr
 | Topic | Direction | Description |
 |---|---|---|
 | `status` | Outbound | Periodic or on-demand full JSON state report; also used as MQTT 5.0 LWT offline topic |
-| `events` | Outbound | System events (`MQTT_CONNECTED`, `BUTTON_PRESS`, `DEVICE_SET_COMMAND`, etc.) |
+| `events` | Outbound | System events (`MQTT_CONNECTED`, `BUTTON_PRESS`, `DEVICE_SET_COMMAND`, `PULSE_AUTO_OFF`, `TIMER_TRIGGER`, etc.) |
 | `telemetry` | Outbound | Periodic health metrics snapshot |
-| `commands` | Inbound | Global control commands (`reset`, `status`, `toggle_all`, `sync_states`, `switch1:...`) |
+| `commands` | Inbound | Global control commands (`reset`, `status`, `toggle_all`, `sync_states`, `switch1:...`, `startup:...`, `pulse:...`, `sled:...`) |
 | `event/<ChipID>` | Inbound | Device-targeted event channel |
 | `device_switch1/state` | Inbound | Turn relay on/off/toggle via MQTT payload (`on`, `off`, `toggle`) |
 | `device_switch1/command` | Inbound | Alternate command topic |
@@ -505,13 +531,16 @@ Topics are derived dynamically at runtime using the chip's unique eFuse MAC addr
 
 ### Command Handling
 
-Sending strings to the `commands` topic triggers the following actions:
+Sending strings to the `commands` topic triggers the following actions in `RelayFirmwareController::processCommand`:
 
 - `"reset"`: Triggers a clean system restart via `ESP.restart()`.
 - `"status"`: Forces immediate publication of the full device status JSON.
 - `"toggle_all"`: Inverts all active relays and publishes their state updates.
 - `"sync_states"`: Queries the server for current cloud desired states.
 - `"switch1:on"`, `"switch1:off"`, `"switch1:toggle"`: Directly modifies Relay 1.
+- `"startup:off"`, `"startup:on"`, `"startup:stay"`: Configures the power-on `StartupMode` via `RelayService::setStartupMode` and persists it in NVS (`saveStartupModeNvs`).
+- `"pulse:on,<width_ms>"`, `"pulse:off"`: Enables or disables Inching / Pulse mode (`500..36000000 ms` in `500 ms` steps) via `RelayService::configurePulse` and persists it in NVS (`savePulseConfigNvs`).
+- `"sled:on"`, `"sled:off"`: Enables or disables the operational status LED (`GpioIndicator::setSledOnline`) and persists it in NVS (`saveSledOnlineNvs`).
 
 ### JSON Telemetry & Status Payloads
 
@@ -548,6 +577,52 @@ Status publication to `status`:
 
 ---
 
+## Local LAN HTTP Control (`/zeroconf/*`) & Scheduled Timers
+
+### Added Application & Infrastructure Functions
+
+- **`RelayService` (`src/Application/Services/RelayService.h`)**:
+  - `initWithStartupConfig(startupMode, lastSavedState, pulseEnabled, pulseWidthMs, nowMs)`: Restores the relay output in `< 20 ms` at boot according to `StartupMode::Off`, `StartupMode::On`, or `StartupMode::Stay`.
+  - `flushDeferredSave(nowMs)` / `hasPendingDeferredSave()`: Commits `lastRelayState` to NVS `150 ms` after the latest state transition when `StartupMode::Stay` is active, preventing Flash wear during rapid toggles.
+  - `configurePulse(enabled, widthMs, nowMs)` / `updatePulseTimer(nowMs, outExpiredDeviceId)`: Arms and evaluates the one-shot auto-shutoff pulse timer (`500 ms` to `36,000,000 ms` in `500 ms` increments).
+  - `setStartupMode(mode)` / `getStartupMode()`: Updates and persists the power-on state policy.
+- **`TimerSchedulerService` (`src/Application/Services/TimerSchedulerService.h`)**:
+  - `loadFromStorage()`: Loads up to `8` `ScheduledTimer` entries from NVS (`loadTimersNvs`).
+  - `upsertTimer(timer)` / `clearAllTimers()` / `getActiveTimerCount()`: Manages `Once`, `Repeat` (weekday bitmask + UTC hour/minute), and `Duration` (cyclic on/off loop) timers in NVS (`saveTimersNvs`).
+  - `evaluate(currentEpochSec, nowMs)`: Evaluates active timers once per second against `NtpTimeProvider::epochSeconds()`.
+- **`CryptoUtils` (`src/Application/Services/CryptoUtils.h`)**:
+  - `computeMd5(data, len, outDigest)` & `deriveLanKey(deviceKey, outKey)`: Computes the 16-byte `MD5(deviceKey)` symmetric key.
+  - `aes128CbcEncryptPkcs7(...)` & `aes128CbcDecryptPkcs7(...)`: Pure C++17 `AES-128-CBC` cipher with `PKCS#7` padding.
+  - `base64Encode(...)` & `base64Decode(...)`: RFC 4648 Base64 encoding/decoding.
+  - `decryptZeroconfPayload(...)` & `encryptZeroconfPayload(...)`: Encrypts and decrypts LAN `/zeroconf/*` envelopes.
+- **`LanZeroconfServer` (`src/Infrastructure/Net/LanZeroconfServer.h`)**:
+  - `loop(wifiConnected)` / `startServer()` / `stopServer()`: Manages the non-blocking HTTP server on port `8081` and mDNS responder.
+  - `notifyMdnsStateChange()`: Increments the sequence counter and updates mDNS TXT records (`seq`, `encrypt`, `iv`, `data1`) on every local, timer, LAN, or MQTT 5.0 state change.
+  - `dispatchZeroconf(uri, rawBody, respBuf, respBufSize)`: Processes plain JSON or `AES-128-CBC` encrypted HTTP `POST` requests and synchronizes changes with `RelayService` and `TelemetryService`.
+- **`GpioButton`, `GpioIndicator` & `ble_provisioning`**:
+  - `GpioButton::update()` & `GpioButton::isPhysicallyPressed()`: `25 ms` periodic tick sampler with `50 ms` debounce and immediate `5,000 ms` `LongPress` trigger.
+  - `GpioIndicator::setSledOnline(enabled)` & `GpioIndicator::isSledOnline()`: Controls the `Operational` LED state and executes the `100 ms` multi-pattern cadence table.
+  - `runQuickPairing(timeoutMs, indicator, button)` & `WifiApProvisioningPortal::startPortal(timeoutSec, indicator, button)`: Implements the 2-stage pairing state machine (`runPairingWorkflow`).
+
+### Local LAN HTTP Endpoints (`:8081`)
+
+All endpoints accept `HTTP POST` with either a plain JSON body (`{"data": {...}}`) or an encrypted envelope (`{"sequence":"...","deviceid":"...","selfApikey":"...","iv":"<Base64>","encrypt":true,"data":"<Base64>"}`):
+
+| Endpoint | Method | Description | Example `data` Payload |
+|---|---|---|---|
+| `/zeroconf/switch` | `POST` | Turn relay ON or OFF immediately over LAN | `{"switch":"on"}` |
+| `/zeroconf/switches` | `POST` | Multi-channel array format for relay actuation | `{"switches":[{"switch":"off","outlet":0}]}` |
+| `/zeroconf/startup` | `POST` | Configure power-on behavior (`off`, `on`, `stay`) | `{"startup":"stay"}` |
+| `/zeroconf/pulse` | `POST` | Configure Inching / Pulse mode (`500..36000000 ms`) | `{"pulse":"on","pulseWidth":1500}` |
+| `/zeroconf/sled` | `POST` | Enable or disable the status LED when online | `{"sledOnline":"off"}` |
+| `/zeroconf/info` | `POST` | Query current switch, startup, pulse, SLED, version, and RSSI | `{}` |
+| `/zeroconf/signal_strength` | `POST` | Query current Wi-Fi RSSI in dBm | `{}` |
+| `/zeroconf/wifi` | `POST` | Update stored Wi-Fi SSID and password in NVS | `{"ssid":"NewWiFi","password":"Pass"}` |
+| `/zeroconf/timers` | `POST` | Replace/configure up to 8 scheduled timers (`once`, `repeat`, `duration`) | `{"timers":[{"id":1,"enabled":1,"type":"once","at":1793500000,"do":{"switch":"on"}}]}` |
+| `/zeroconf/ota_unlock` | `POST` | Unlock local OTA state flag | `{}` |
+
+---
+
 ## Over-The-Air (OTA) Updates
 
 Over-The-Air updates are fully handled by **`MQTTOTAv5`**:
@@ -556,31 +631,40 @@ Over-The-Air updates are fully handled by **`MQTTOTAv5`**:
 2. **Chunked Stream**: Firmware binaries are delivered in discrete chunks over MQTT 5.0, directly written into the standby OTA partition (`app0` or `app1`).
 3. **Integrity & Security**: Verifies the cumulative SHA-256 hash against metadata transmitted in MQTT 5.0 User Properties.
 4. **Safety & Rollback**: Validates image headers before writing; registers rollback protection via `esp_ota_ops.h` so the board reverts automatically if a new build fails to boot.
-5. **Non-blocking Loop**: Managed via `ota.handle()` inside `loop()` without blocking relay operations.
+5. **Non-blocking Loop**: Managed via `ota.handle()` inside `loop()` while preserving physical button responsiveness and displaying the `OtaProgress` triple-blink LED pattern.
 
 ---
 
 ## Physical Controls & Dual Provisioning Portals
 
-The onboard push button on **GPIO 0** provides multi-mode functionality via `GpioButton`:
+The onboard push button on **GPIO 0** provides multi-mode functionality via `GpioButton` (`25 ms` sample ticks):
 
-- **Short Press (< 3000 ms)**: Toggles Relay 1 locally, emits an immediate `"BUTTON_PRESS"` event JSON to `events`, and publishes the state string (`"on"`/`"off"`) to `device_switch1_state`.
-- **Long Press (> 3000 ms)**: Launches the **BLE Provisioning Portal** (advertising as `RELAY-<DeviceID>` for 60 seconds with rapid LED indicator blinking). If no configuration is submitted via Bluetooth before timeout, it automatically launches the **SoftAP Web Portal**:
-  - **SSID**: `VESIS-<ChipID>`
-  - **Password**: `12345678`
-  - **Timeout**: 180 seconds
-  - Users can connect their smartphone or laptop to configure WiFi credentials. Once configured (or on timeout), the ESP32 automatically reboots.
-- **Boot Hold (> 3000 ms)**: Powering on the board while holding GPIO 0 forces immediate entry into the BLE provisioning portal.
+- **Short Press (`50 ms .. < 5,000 ms`)**:
+  - In normal operation: Toggles Relay 1 locally (Offline-First), schedules a `150 ms` deferred NVS save if `StartupMode == Stay`, emits a `"BUTTON_PRESS"` event JSON to `events`, publishes the state string (`"on"`/`"off"`) to `device_switch1_state`, and updates mDNS TXT state (`notifyMdnsStateChange`).
+  - During `Quick Pairing` or `SoftAP`: Immediately cancels pairing mode and returns to normal operation.
+- **1st Long Press (`>= 5,000 ms`, triggered immediately while held)**:
+  - Launches Stage 1 **Quick Pairing** (`runQuickPairing`: advertising BLE GATT as `RELAY-<DeviceID>` + listening for Wi-Fi SmartConfig `ESP-Touch / AirKiss` simultaneously, with the double-blink LED pattern).
+- **2nd Long Press (`>= 5,000 ms` while inside Quick Pairing)**:
+  - Transitions immediately to Stage 2 **SoftAP Web Portal (`WifiApProvisioningPortal::startPortal`)**:
+    - **SSID**: `VESIS-<ChipID>`
+    - **Password**: `12345678`
+    - **Timeout**: 180 seconds
+    - Users can connect their smartphone or laptop to configure WiFi and MQTT 5.0 credentials, which are persisted to NVS (`relay-config`) via `saveConfig()` before rebooting.
 
 ---
 
 ## Status Indicator (LED)
 
-The status LED on **GPIO 2** provides clear visual diagnostics without blocking the processor:
+The status LED on **GPIO 2** provides visual diagnostics via `GpioIndicator` using a non-blocking `100 ms` base timer:
 
-- **Fast Blink (100 ms interval)**: Disconnected from WiFi / searching for network / BLE Provisioning active.
-- **Slow Blink (400 ms interval)**: WiFi connected, attempting connection to MQTT 5.0 broker.
-- **Solid ON**: Fully operational (WiFi and MQTT 5.0 connected).
+| Status (`IndicatorStatus`) | Cadence Pattern (`100 ms` base tick) | Meaning |
+|---|---|---|
+| **`Disconnected`** | `1000 ms ON / 1000 ms OFF` | Disconnected from WiFi / searching for access point |
+| **`Connecting`** | `200 ms ON / 1800 ms OFF` | WiFi connected, attempting connection to MQTT 5.0 broker |
+| **`QuickPairing`** | `100 ms ON, 100 ms OFF, 100 ms ON, 700 ms OFF` | Double blink + pause: Stage 1 Quick Pairing (`BLE GATT` + `SmartConfig`) active |
+| **`CompatibleAp`** | `100 ms ON / 100 ms OFF` (continuous 5 Hz) | Fast continuous blink: Stage 2 SoftAP (`VESIS-<ChipID>`) active |
+| **`OtaProgress` / `Error`** | `100 ms ON, 100 ms OFF` (x3) + `400 ms OFF` | Triple blink + pause: OTA firmware transfer in progress or error |
+| **`Operational`** | Solid `ON` (if `sledOnline == true`) or `OFF` (`sledOnline == false`) | Fully operational (WiFi and MQTT 5.0 connected) |
 
 ---
 

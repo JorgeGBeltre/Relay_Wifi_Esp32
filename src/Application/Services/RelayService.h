@@ -49,7 +49,7 @@ public:
     bool toggle(const std::string& deviceId, unsigned long nowMs = 0);
     void toggleAll(unsigned long nowMs = 0);
 
-    // Guardado diferido en NVS (150 ms tras última conmutación cuando StartupMode::Stay, Sonoff 0x40232DDD)
+    // Guardado diferido en NVS (150 ms tras última conmutación cuando StartupMode::Stay)
     bool flushDeferredSave(unsigned long nowMs);
     bool hasPendingDeferredSave() const { return pendingDeferredSave_; }
 

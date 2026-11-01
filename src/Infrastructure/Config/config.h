@@ -35,8 +35,8 @@ inline const char* root_ca_pem = \
 constexpr uint8_t RelayPin1 = 4;
 constexpr uint8_t BUTTON_PIN1 = 0;
 constexpr uint8_t wifiLed = 2;
-constexpr uint8_t DEBOUNCE_TIME = 50;             // 2 ticks * 25 ms = 50 ms (Sonoff 0x40233431)
-constexpr uint16_t BUTTON_LONG_PRESS_TIME = 5000; // 200 ticks * 25 ms = 5000 ms (Sonoff 0x40233388)
+constexpr uint8_t DEBOUNCE_TIME = 50;             // 2 ticks * 25 ms = 50 ms
+constexpr uint16_t BUTTON_LONG_PRESS_TIME = 5000; // 200 ticks * 25 ms = 5000 ms
 
 constexpr unsigned long STATUS_PUBLISH_INTERVAL = 3600000;
 constexpr unsigned long TIME_SYNC_INTERVAL = 3600000;

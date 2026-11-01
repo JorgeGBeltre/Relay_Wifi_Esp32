@@ -68,7 +68,7 @@ bool RelayService::setDesiredState(const std::string& deviceId, bool desired) {
 }
 
 void RelayService::onRelayHardwareTransition(const std::string& deviceId, bool newState, unsigned long nowMs) {
-    // 1. Si StartupMode == Stay, agendar guardado diferido de 150 ms (Sonoff 0x40232DDD)
+    // 1. Si StartupMode == Stay, agendar guardado diferido de 150 ms
     if (startupMode_ == domain::StartupMode::Stay && configRepo_) {
         deferredStateToSave_ = newState;
         if (nowMs == 0) {
