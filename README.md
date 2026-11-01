@@ -337,7 +337,7 @@ The provisioning flow executes a 7-step deterministic security and association l
    uint64_t chipId = ESP.getEfuseMac();
    snprintf(buf, sizeof(buf), "%04X%08X", (uint16_t)(chipId >> 32), (uint32_t)chipId);
    ```
-   This serves as the unique hardware serial number ("cédula de identidad") recognized by mobile apps and cloud servers.
+   This serves as the unique hardware serial number ("device identity card") recognized by mobile apps and cloud servers.
 3. **Factory Device Key Generation**: If no `device_key` is stored, the firmware derives a factory-grade UUID v4 cryptographic key using the hardware MAC entropy, bit shifting, and XOR masking (`%08X-%04X-4%03X-%04X-%012llX`). This key acts as the factory private symmetric key (`apikey` / `devicekey`) used for LAN-mode encryption (`deriveLanKey`) and hardware authenticity verification.
 4. Both keys are permanently stored in NVS and survive reboots and OTA updates.
 
