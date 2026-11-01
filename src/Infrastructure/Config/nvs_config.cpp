@@ -48,16 +48,21 @@ bool isProvisioned() {
 
 void loadConfig() {
     preferences.begin("relay-config", true);
-    config.wifi_ssid    = preferences.getString("wifi_ssid", "");
-    config.wifi_pass    = preferences.getString("wifi_pass", "");
-    config.mqtt_broker  = preferences.getString("mqtt_broker", MQTT_SERVER);
-    config.mqtt_port    = preferences.getInt("mqtt_port", MQTT_PORT);
-    config.mqtt_user    = preferences.getString("mqtt_user", API_KEY);
-    config.mqtt_pass    = preferences.getString("mqtt_pass", "");
-    config.device_id    = preferences.getString("device_id", "");
-    config.device_key   = preferences.getString("device_key", "");
-    config.bind_token   = preferences.getString("bind_token", "");
-    config.ota_hmac_key = preferences.getString("ota_hmac", "");
+    config.wifi_ssid        = preferences.getString("wifi_ssid", "");
+    config.wifi_pass        = preferences.getString("wifi_pass", "");
+    config.mqtt_broker      = preferences.getString("mqtt_broker", MQTT_SERVER);
+    config.mqtt_port        = preferences.getInt("mqtt_port", MQTT_PORT);
+    config.mqtt_user        = preferences.getString("mqtt_user", API_KEY);
+    config.mqtt_pass        = preferences.getString("mqtt_pass", "");
+    config.device_id        = preferences.getString("device_id", "");
+    config.device_key       = preferences.getString("device_key", "");
+    config.bind_token       = preferences.getString("bind_token", "");
+    config.ota_hmac_key     = preferences.getString("ota_hmac", "");
+    config.startup_mode     = preferences.getUChar("startup", 0);
+    config.last_relay_state = preferences.getBool("last_rly", false);
+    config.pulse_enabled    = preferences.getBool("pulse_en", false);
+    config.pulse_width_ms   = preferences.getUInt("pulse_w", 500);
+    config.sled_online      = preferences.getBool("sled_on", true);
     preferences.end();
 
     if (config.device_key.length() == 0) {
@@ -80,7 +85,12 @@ void saveConfig() {
     preferences.putString("device_key",  config.device_key);
     preferences.putString("bind_token",  config.bind_token);
     preferences.putString("ota_hmac",    config.ota_hmac_key);
-    preferences.putBool("provisioned",   true);
+    preferences.putUChar("startup",      config.startup_mode);
+    preferences.putBool("last_rly",      config.last_relay_state);
+    preferences.putBool("pulse_en",      config.pulse_enabled);
+    preferences.putUInt("pulse_w",       config.pulse_width_ms);
+    preferences.putBool("sled_on",       config.sled_online);
+    preferences.putBool("provisioned",   config.wifi_ssid.length() > 0);
     preferences.end();
 }
 
@@ -90,3 +100,59 @@ void resetConfig() {
     preferences.end();
 }
 
+bool saveLastRelayStateNvs(bool state) {
+    config.last_relay_state = state;
+    if (!preferences.begin("relay-config", false)) return false;
+    preferences.putBool("last_rly", state);
+    preferences.end();
+    return true;
+}
+
+bool saveStartupModeNvs(uint8_t mode) {
+    config.startup_mode = mode;
+    if (!preferences.begin("relay-config", false)) return false;
+    preferences.putUChar("startup", mode);
+    preferences.end();
+    return true;
+}
+
+bool savePulseConfigNvs(bool enabled, uint32_t widthMs) {
+    config.pulse_enabled = enabled;
+    config.pulse_width_ms = widthMs;
+    if (!preferences.begin("relay-config", false)) return false;
+    preferences.putBool("pulse_en", enabled);
+    preferences.putUInt("pulse_w", widthMs);
+    preferences.end();
+    return true;
+}
+
+bool saveSledOnlineNvs(bool enabled) {
+    config.sled_online = enabled;
+    if (!preferences.begin("relay-config", false)) return false;
+    preferences.putBool("sled_on", enabled);
+    preferences.end();
+    return true;
+}
+
+bool saveTimersNvs(const relay::domain::ScheduledTimer* timers, size_t count) {
+    if (!preferences.begin("relay-config", false)) return false;
+    const size_t safeCount = (count > 8) ? 8 : count;
+    preferences.putUChar("tmr_cnt", static_cast<uint8_t>(safeCount));
+    if (safeCount > 0 && timers) {
+        preferences.putBytes("tmr_blob", timers, safeCount * sizeof(relay::domain::ScheduledTimer));
+    }
+    preferences.end();
+    return true;
+}
+
+size_t loadTimersNvs(relay::domain::ScheduledTimer* timers, size_t maxCount) {
+    if (!timers || maxCount == 0) return 0;
+    if (!preferences.begin("relay-config", true)) return 0;
+    const uint8_t storedCount = preferences.getUChar("tmr_cnt", 0);
+    const size_t safeCount = (storedCount > maxCount) ? maxCount : storedCount;
+    if (safeCount > 0) {
+        preferences.getBytes("tmr_blob", timers, safeCount * sizeof(relay::domain::ScheduledTimer));
+    }
+    preferences.end();
+    return safeCount;
+}

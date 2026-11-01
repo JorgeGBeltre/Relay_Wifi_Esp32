@@ -12,6 +12,8 @@ set(RELAY_APPLICATION_SOURCES
     src/Application/Services/RelayService.cpp
     src/Application/Services/ConnectivityService.cpp
     src/Application/Services/TelemetryService.cpp
+    src/Application/Services/TimerSchedulerService.cpp
+    src/Application/Services/CryptoUtils.cpp
     src/Application/Controllers/RelayFirmwareController.cpp
 )
 
@@ -22,6 +24,7 @@ set(RELAY_INFRASTRUCTURE_SOURCES
     src/Infrastructure/Messaging/mqtt_client.cpp
     src/Infrastructure/Net/NetworkClient.cpp
     src/Infrastructure/Net/WifiLink.cpp
+    src/Infrastructure/Net/LanZeroconfServer.cpp
     src/Infrastructure/Ota/ota_manager.cpp
     src/Infrastructure/Serialization/ArduinoJsonPayloadSerializer.cpp
     src/Infrastructure/System/EspDeviceRepository.cpp

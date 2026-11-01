@@ -7,24 +7,30 @@
 namespace relay::infra {
 
 /**
- * @brief Portal BLE (NimBLE): permite recibir tramas JSON o características GATT individuales
- * para configurar credenciales WiFi y MQTT e identificar el dispositivo.
+ * @brief Portal Quick Pairing (BLE GATT + SmartConfig ESP-Touch/AirKiss):
+ * Permite recibir tramas JSON, características GATT individuales o paquetes SmartConfig,
+ * con soporte de transición a SoftAP VESIS-<ChipID> en una 2ª pulsación larga de 5.0 s.
  */
 class BleProvisioningPortal : public domain::IProvisioningPortal {
 public:
     bool run(unsigned long timeoutMs) override {
         return runBLEProvisioning(timeoutMs);
     }
+
+    QuickPairingResult runInteractive(unsigned long timeoutMs,
+                                      domain::IIndicator& indicator,
+                                      domain::IButtonHandler& button) {
+        return runQuickPairing(timeoutMs, &indicator, &button);
+    }
 };
 
 /**
- * @brief Portal SoftAP / Cautivo (WiFiManager): configuración vía interfaz web WiFi.
+ * @brief Portal SoftAP / Cautivo (WiFiManager VESIS-<ChipID>): configuración vía interfaz web WiFi.
  */
 class WifiApProvisioningPortalWrapper : public domain::IProvisioningPortal {
 public:
     bool run(unsigned long timeoutMs) override {
-        WifiApProvisioningPortal::startPortal(timeoutMs / 1000);
-        return true;
+        return WifiApProvisioningPortal::startPortal(timeoutMs / 1000);
     }
 };
 

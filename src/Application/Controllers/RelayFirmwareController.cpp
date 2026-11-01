@@ -1,4 +1,5 @@
 #include "Application/Controllers/RelayFirmwareController.h"
+#include <cstdlib>
 
 namespace relay::app {
 
@@ -13,10 +14,13 @@ RelayFirmwareController::RelayFirmwareController(
     domain::IClock& clock,
     domain::ILogger& logger,
     const MqttTopics& topics,
-    ApTriggerCallback apCallback)
+    ApTriggerCallback apCallback,
+    TimerSchedulerService* timerScheduler,
+    domain::IConfigRepository* configRepo)
     : relays_(relays), connectivity_(connectivity), telemetry_(telemetry),
       ota_(ota), indicator_(indicator), system_(system), timeProvider_(timeProvider),
-      clock_(clock), log_(logger), topics_(topics), apCallback_(std::move(apCallback)) {}
+      clock_(clock), log_(logger), topics_(topics), apCallback_(std::move(apCallback)),
+      timerScheduler_(timerScheduler), configRepo_(configRepo) {}
 
 void RelayFirmwareController::registerButton(domain::IButtonHandler& button,
                                              const std::string& targetDeviceId) {
@@ -24,11 +28,29 @@ void RelayFirmwareController::registerButton(domain::IButtonHandler& button,
     buttons_.push_back(ButtonBinding{&button, targetDeviceId});
 }
 
-void RelayFirmwareController::setup() {
-    log_.info("[CTRL] Inicializando sistema de relés...");
-    relays_.init();
+void RelayFirmwareController::updateIndicatorForConnectivity() {
+    if (ota_.isInProgress()) {
+        indicator_.show(domain::IndicatorStatus::OtaProgress);
+    } else if (!connectivity_.network().isConnected()) {
+        indicator_.show(domain::IndicatorStatus::Disconnected);
+    } else if (!connectivity_.transport().isConnected()) {
+        indicator_.show(domain::IndicatorStatus::Connecting);
+    } else {
+        indicator_.show(domain::IndicatorStatus::Operational);
+    }
+}
 
-    indicator_.show(domain::IndicatorStatus::Connecting);
+void RelayFirmwareController::setup(bool relaysAlreadyInitialized) {
+    if (!relaysAlreadyInitialized) {
+        log_.info("[CTRL] Inicializando sistema de relés...");
+        relays_.init();
+    }
+
+    if (timerScheduler_) {
+        timerScheduler_->loadFromStorage();
+    }
+
+    indicator_.show(domain::IndicatorStatus::Disconnected);
 
     connectivity_.transport().onMessage([this](const std::string& topic, const std::string& payload) {
         this->handleIncomingMessage(topic, payload);
@@ -44,7 +66,7 @@ void RelayFirmwareController::setup() {
         log_.info("[CTRL] Sistema OPERACIONAL");
     } else {
         state_ = State::Connecting;
-        indicator_.show(domain::IndicatorStatus::Connecting);
+        updateIndicatorForConnectivity();
     }
 }
 
@@ -67,35 +89,71 @@ void RelayFirmwareController::onMqttConnected() {
 }
 
 void RelayFirmwareController::tick() {
+    const unsigned long now = clock_.nowMs();
+
+    // 1. Actualizar patrón SLED (base de 100 ms, Sonoff 0x4023C8D4)
     indicator_.update();
 
+    // 2. El botón físico siempre es prioritario (Offline-First, incluso durante OTA o reconexión)
+    handleButtonEvents();
+
+    // 3. Ejecutar guardado diferido en NVS (150 ms tras última conmutación si StartupMode::Stay, 0x40232DDD)
+    relays_.flushDeferredSave(now);
+
+    // 4. Evaluar temporizador one-shot de Modo Pulso (Inching)
+    std::string expiredPulseDeviceId;
+    if (relays_.updatePulseTimer(now, expiredPulseDeviceId)) {
+        log_.info("[PULSE] Modo pulso expiró -> apagando automáticamente " + expiredPulseDeviceId);
+        telemetry_.publishEvent("PULSE_AUTO_OFF", "Apagado automático por modo pulso (inching)", "off");
+        telemetry_.publishRelayState(expiredPulseDeviceId);
+        if (onStateChangeCb_) onStateChangeCb_();
+    }
+
+    // 5. Evaluar hasta 8 temporizadores programados (Once, Repeat, Duration) una vez por segundo
+    if (timerScheduler_) {
+        const uint32_t epochSec = timeProvider_.epochSeconds();
+        if (epochSec > 1000000000U && epochSec != lastEvaluatedEpochSec_) {
+            lastEvaluatedEpochSec_ = epochSec;
+            if (timerScheduler_->evaluate(epochSec, now) > 0) {
+                telemetry_.publishEvent("TIMER_TRIGGER", "Conmutación ejecutada por temporizador programado");
+                telemetry_.publishAllRelayStates();
+                if (onStateChangeCb_) onStateChangeCb_();
+            }
+        }
+    }
+
+    // 6. Gestión de OTA por chunks sobre MQTT 5.0 (MQTTOTAv5)
     if (ota_.isInProgress()) {
+        indicator_.show(domain::IndicatorStatus::OtaProgress);
         ota_.handle();
         clock_.sleepMs(10);
         return;
     }
 
     ota_.handle();
-    handleButtonEvents();
 
+    // 7. Máquina de estados de conectividad Wi-Fi + MQTT 5.0 no bloqueante
     if (state_ == State::Connecting) {
-        if (connectivity_.ensureConnected()) {
-            state_ = State::Operational;
-            indicator_.show(domain::IndicatorStatus::Operational);
-            log_.info("[CTRL] Estado -> OPERATIONAL");
+        updateIndicatorForConnectivity();
+        if (lastConnectAttemptMs_ == 0 || (now - lastConnectAttemptMs_) >= RECONNECT_BACKOFF_MS) {
+            lastConnectAttemptMs_ = now;
+            if (connectivity_.ensureConnected()) {
+                state_ = State::Operational;
+                indicator_.show(domain::IndicatorStatus::Operational);
+                log_.info("[CTRL] Estado -> OPERATIONAL");
+            }
         }
     } else if (state_ == State::Operational) {
         if (!connectivity_.isOnline()) {
-            indicator_.show(domain::IndicatorStatus::Connecting);
-            if (!connectivity_.ensureConnected()) {
-                state_ = State::Connecting;
-                return;
-            }
+            updateIndicatorForConnectivity();
+            state_ = State::Connecting;
+            lastConnectAttemptMs_ = now;
+            return;
         }
 
+        indicator_.show(domain::IndicatorStatus::Operational);
         connectivity_.transport().loop();
 
-        unsigned long now = clock_.nowMs();
         if (now - lastStatusPublishMs_ >= STATUS_INTERVAL_MS) {
             lastStatusPublishMs_ = now;
             telemetry_.publishStatus();
@@ -109,13 +167,14 @@ void RelayFirmwareController::tick() {
 }
 
 void RelayFirmwareController::handleButtonEvents() {
+    const unsigned long now = clock_.nowMs();
     for (auto& btn : buttons_) {
         if (!btn.handler) continue;
         auto ev = btn.handler->update();
 
         if (ev == domain::ButtonEvent::ShortPress) {
             log_.info("[BUTTON] Pulsación corta detectada para " + btn.targetDeviceId);
-            relays_.toggle(btn.targetDeviceId);
+            relays_.toggle(btn.targetDeviceId, now);
 
             const auto* state = relays_.getState(btn.targetDeviceId);
             std::string stateStr = (state && state->currentState) ? "on" : "off";
@@ -123,9 +182,10 @@ void RelayFirmwareController::handleButtonEvents() {
 
             telemetry_.publishEvent("BUTTON_PRESS", desc, stateStr);
             telemetry_.publishRelayState(btn.targetDeviceId);
+            if (onStateChangeCb_) onStateChangeCb_();
         } else if (ev == domain::ButtonEvent::LongPress) {
-            log_.info("[BUTTON] Pulsación larga (>3s) detectada -> Activando modo AP");
-            telemetry_.publishEvent("AP_MODE_ACTIVATED", "Modo Access Point activado por botón físico");
+            log_.info("[BUTTON] Pulsación larga (5s) detectada -> Activando Quick Pairing (BLE + SmartConfig / SoftAP VESIS)");
+            telemetry_.publishEvent("PAIRING_MODE_ACTIVATED", "Modo emparejamiento activado por botón físico");
             telemetry_.publishStatus();
 
             if (apCallback_) {
@@ -138,6 +198,7 @@ void RelayFirmwareController::handleButtonEvents() {
 }
 
 void RelayFirmwareController::handleIncomingMessage(const std::string& topic, const std::string& payload) {
+    const unsigned long now = clock_.nowMs();
     log_.info("[CTRL] Mensaje recibido en [" + topic + "]: " + payload);
 
     if (topic == topics_.commands) {
@@ -157,22 +218,23 @@ void RelayFirmwareController::handleIncomingMessage(const std::string& topic, co
 
             if (turnOn) {
                 relays_.setDesiredState(r.deviceId, true);
-                relays_.applyDesiredState(r.deviceId);
+                relays_.applyDesiredState(r.deviceId, now);
             } else if (turnOff) {
                 relays_.setDesiredState(r.deviceId, false);
-                relays_.applyDesiredState(r.deviceId);
+                relays_.applyDesiredState(r.deviceId, now);
             } else if (doToggle) {
-                relays_.toggle(r.deviceId);
+                relays_.toggle(r.deviceId, now);
             }
 
             std::string stateStr = relays_.getState(r.deviceId)->currentState ? "on" : "off";
             telemetry_.publishEvent("DEVICE_SET_COMMAND", "Comando recibido: " + payload, stateStr);
             telemetry_.publishRelayState(r.deviceId);
+            if (onStateChangeCb_) onStateChangeCb_();
             return;
         } else if (topic == stateTopic) {
             bool serverState = (payload == "on" || payload == "1" || payload == "true");
             relays_.setDesiredState(r.deviceId, serverState);
-            relays_.applyDesiredState(r.deviceId);
+            relays_.applyDesiredState(r.deviceId, now);
 
             if (!relays_.isInitialSyncCompleted()) {
                 relays_.setInitialSyncCompleted(true);
@@ -180,12 +242,14 @@ void RelayFirmwareController::handleIncomingMessage(const std::string& topic, co
             } else {
                 telemetry_.publishEvent("STATE_UPDATE", "Actualización de estado desde servidor", serverState ? "on" : "off");
             }
+            if (onStateChangeCb_) onStateChangeCb_();
             return;
         }
     }
 }
 
 void RelayFirmwareController::processCommand(const std::string& cmd) {
+    const unsigned long now = clock_.nowMs();
     if (cmd == "reset") {
         telemetry_.publishEvent("SYSTEM_RESET", "Reinicio del sistema solicitado");
         clock_.sleepMs(1000);
@@ -194,9 +258,10 @@ void RelayFirmwareController::processCommand(const std::string& cmd) {
         telemetry_.publishStatus();
     } else if (cmd == "toggle_all") {
         telemetry_.publishEvent("RELAY_TOGGLE_ALL", "Todos los relays cambiados de estado");
-        relays_.toggleAll();
+        relays_.toggleAll(now);
         telemetry_.publishStatus();
         telemetry_.publishAllRelayStates();
+        if (onStateChangeCb_) onStateChangeCb_();
     } else if (cmd == "sync_states") {
         telemetry_.publishEvent("STATE_SYNC", "Sincronización de estados solicitada");
         relays_.setInitialSyncCompleted(false);
@@ -207,24 +272,52 @@ void RelayFirmwareController::processCommand(const std::string& cmd) {
         if (subcmd == "on" || subcmd == "1" || subcmd == "true") {
             for (const auto& r : relays_.getAllStates()) {
                 relays_.setDesiredState(r.deviceId, true);
-                relays_.applyDesiredState(r.deviceId);
+                relays_.applyDesiredState(r.deviceId, now);
                 telemetry_.publishRelayState(r.deviceId);
                 break;
             }
         } else if (subcmd == "off" || subcmd == "0" || subcmd == "false") {
             for (const auto& r : relays_.getAllStates()) {
                 relays_.setDesiredState(r.deviceId, false);
-                relays_.applyDesiredState(r.deviceId);
+                relays_.applyDesiredState(r.deviceId, now);
                 telemetry_.publishRelayState(r.deviceId);
                 break;
             }
         } else if (subcmd == "toggle") {
             for (const auto& r : relays_.getAllStates()) {
-                relays_.toggle(r.deviceId);
+                relays_.toggle(r.deviceId, now);
                 telemetry_.publishRelayState(r.deviceId);
                 break;
             }
         }
+        if (onStateChangeCb_) onStateChangeCb_();
+    } else if (cmd.rfind("startup:", 0) == 0) {
+        std::string modeStr = cmd.substr(8);
+        domain::StartupMode mode = domain::startupModeFromString(modeStr);
+        relays_.setStartupMode(mode);
+        telemetry_.publishEvent("STARTUP_MODE_CHANGED", "StartupMode configurado a " + std::string(domain::startupModeToString(mode)));
+        if (onStateChangeCb_) onStateChangeCb_();
+    } else if (cmd.rfind("pulse:", 0) == 0) {
+        std::string sub = cmd.substr(6);
+        if (sub == "off" || sub == "0") {
+            relays_.configurePulse(false, relays_.getPulseWidthMs(), now);
+            telemetry_.publishEvent("PULSE_CONFIG_CHANGED", "Modo pulso desactivado");
+        } else if (sub.rfind("on,", 0) == 0) {
+            uint32_t widthMs = static_cast<uint32_t>(std::strtoul(sub.substr(3).c_str(), nullptr, 10));
+            if (relays_.configurePulse(true, widthMs, now)) {
+                telemetry_.publishEvent("PULSE_CONFIG_CHANGED", "Modo pulso activado (" + std::to_string(widthMs) + " ms)");
+            }
+        }
+        if (onStateChangeCb_) onStateChangeCb_();
+    } else if (cmd.rfind("sled:", 0) == 0) {
+        std::string sub = cmd.substr(5);
+        bool en = (sub == "on" || sub == "1" || sub == "true");
+        indicator_.setSledOnline(en);
+        if (configRepo_) {
+            configRepo_->saveSledOnline(en);
+        }
+        telemetry_.publishEvent("SLED_CONFIG_CHANGED", std::string("Indicador LED online: ") + (en ? "on" : "off"));
+        if (onStateChangeCb_) onStateChangeCb_();
     }
 }
 

@@ -35,14 +35,15 @@ inline const char* root_ca_pem = \
 constexpr uint8_t RelayPin1 = 4;
 constexpr uint8_t BUTTON_PIN1 = 0;
 constexpr uint8_t wifiLed = 2;
-constexpr uint8_t DEBOUNCE_TIME = 50;
-constexpr uint16_t BUTTON_LONG_PRESS_TIME = 3000;
+constexpr uint8_t DEBOUNCE_TIME = 50;             // 2 ticks * 25 ms = 50 ms (Sonoff 0x40233431)
+constexpr uint16_t BUTTON_LONG_PRESS_TIME = 5000; // 200 ticks * 25 ms = 5000 ms (Sonoff 0x40233388)
 
 constexpr unsigned long STATUS_PUBLISH_INTERVAL = 3600000;
 constexpr unsigned long TIME_SYNC_INTERVAL = 3600000;
 constexpr int FAST_BLINK_INTERVAL = 100;
 constexpr int SLOW_BLINK_INTERVAL = 400;
 
+constexpr uint16_t LAN_HTTP_PORT = 8081;
 constexpr const char* FIRMWARE_VERSION = "v0.0.8";
 
 #endif

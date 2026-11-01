@@ -15,6 +15,7 @@ public:
     bool sync() override;
     std::string isoTimestamp() override;
     bool isSynchronized() override;
+    uint32_t epochSeconds() override;
 
 private:
     long gmtOffsetSec_;

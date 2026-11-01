@@ -3,35 +3,82 @@
 
 namespace relay::infra {
 
+namespace {
+volatile bool g_btnIsrTriggered = false;
+
+void IRAM_ATTR onButtonFallingEdgeIsr() {
+    g_btnIsrTriggered = true;
+}
+} // namespace
+
 void GpioButton::init() {
     pinMode(pin_, INPUT_PULLUP);
-    lastState_ = digitalRead(pin_);
-    isPressed_ = false;
-    pressStartTime_ = 0;
+    attachInterrupt(digitalPinToInterrupt(pin_), onButtonFallingEdgeIsr, FALLING);
+    pressTicks_ = 0;
+    releaseTicks_ = 0;
+    longPressFired_ = false;
+    if (digitalRead(pin_) == LOW) {
+        samplingActive_ = true;
+        lastSampleMs_ = millis() - SAMPLE_TICK_MS;
+    } else {
+        samplingActive_ = false;
+    }
+}
+
+bool GpioButton::isPhysicallyPressed() const {
+    return digitalRead(pin_) == LOW;
 }
 
 domain::ButtonEvent GpioButton::update() {
-    bool currentState = digitalRead(pin_);
-    unsigned long now = millis();
-    domain::ButtonEvent result = domain::ButtonEvent::None;
+    const unsigned long now = millis();
 
-    if (currentState == LOW && lastState_ == HIGH) {
-        pressStartTime_ = now;
-        isPressed_ = true;
+    if ((g_btnIsrTriggered || digitalRead(pin_) == LOW) && !samplingActive_) {
+        g_btnIsrTriggered = false;
+        samplingActive_ = true;
+        pressTicks_ = 0;
+        releaseTicks_ = 0;
+        longPressFired_ = false;
+        lastSampleMs_ = now - SAMPLE_TICK_MS;
     }
-    else if (currentState == HIGH && lastState_ == LOW && isPressed_) {
-        unsigned long duration = now - pressStartTime_;
-        isPressed_ = false;
 
-        if (duration >= longPressMs_) {
-            result = domain::ButtonEvent::LongPress;
-        } else if (duration >= debounceMs_) {
-            result = domain::ButtonEvent::ShortPress;
+    if (!samplingActive_) {
+        return domain::ButtonEvent::None;
+    }
+
+    if ((now - lastSampleMs_) < SAMPLE_TICK_MS) {
+        return domain::ButtonEvent::None;
+    }
+    lastSampleMs_ = now;
+
+    const uint32_t debounceTicks = (debounceMs_ >= SAMPLE_TICK_MS) ? (debounceMs_ / SAMPLE_TICK_MS) : 2U;
+    const uint32_t longPressTicks = (longPressMs_ >= SAMPLE_TICK_MS) ? (longPressMs_ / SAMPLE_TICK_MS) : 200U;
+
+    const bool pinLow = (digitalRead(pin_) == LOW);
+    if (pinLow) {
+        releaseTicks_ = 0;
+        ++pressTicks_;
+        if (pressTicks_ >= longPressTicks && !longPressFired_) {
+            longPressFired_ = true;
+            return domain::ButtonEvent::LongPress;
+        }
+        return domain::ButtonEvent::None;
+    }
+
+    // Botón en nivel HIGH (liberado)
+    ++releaseTicks_;
+    if (releaseTicks_ >= debounceTicks) {
+        const bool validShortPress = (pressTicks_ >= debounceTicks && !longPressFired_);
+        samplingActive_ = false;
+        pressTicks_ = 0;
+        releaseTicks_ = 0;
+        longPressFired_ = false;
+        g_btnIsrTriggered = false;
+        if (validShortPress) {
+            return domain::ButtonEvent::ShortPress;
         }
     }
 
-    lastState_ = currentState;
-    return result;
+    return domain::ButtonEvent::None;
 }
 
 }

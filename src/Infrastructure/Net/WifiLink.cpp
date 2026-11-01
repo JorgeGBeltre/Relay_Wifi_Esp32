@@ -7,23 +7,19 @@ namespace relay::infra {
 bool WifiLink::connect() {
     if (WiFi.status() == WL_CONNECTED) return true;
 
-    Serial.println("[WIFI] Iniciando conexión WiFi...");
-    WiFi.mode(WIFI_STA);
-
-    if (!ssid_.empty()) {
-        Serial.printf("[WIFI] Conectando a red SSID: %s\n", ssid_.c_str());
-        WiFi.begin(ssid_.c_str(), pass_.c_str());
-    } else {
-        Serial.println("[WIFI] Conectando con credenciales previas guardadas...");
-        WiFi.begin();
+    if (ssid_.empty()) {
+        return false;
     }
+
+    Serial.printf("[WIFI] Iniciando conexión WiFi a SSID: %s\n", ssid_.c_str());
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid_.c_str(), pass_.c_str());
+    lastReconnectAttempt_ = millis();
 
     unsigned long start = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - start < connectTimeoutMs_) {
-        delay(150);
-        Serial.print(".");
+    while (WiFi.status() != WL_CONNECTED && (millis() - start) < 1500) {
+        delay(25);
     }
-    Serial.println();
 
     if (WiFi.status() == WL_CONNECTED) {
         Serial.printf("[WIFI] ¡Conectado! IP: %s, RSSI: %d dBm\n",
@@ -31,7 +27,7 @@ bool WifiLink::connect() {
         return true;
     }
 
-    Serial.println("[WIFI] No se pudo conectar a la red WiFi");
+    Serial.println("[WIFI] Asociación en progreso en segundo plano (Offline-First activo)");
     return false;
 }
 
@@ -52,11 +48,10 @@ void WifiLink::loop() {
         unsigned long now = millis();
         if (now - lastReconnectAttempt_ > 10000) {
             lastReconnectAttempt_ = now;
-            Serial.println("[WIFI] Intentando reconexión...");
             if (!ssid_.empty()) {
+                Serial.printf("[WIFI] Reintentando conexión a %s...\n", ssid_.c_str());
+                WiFi.mode(WIFI_STA);
                 WiFi.begin(ssid_.c_str(), pass_.c_str());
-            } else {
-                WiFi.begin();
             }
         }
     }

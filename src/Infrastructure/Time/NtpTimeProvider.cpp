@@ -7,7 +7,7 @@ namespace relay::infra {
 bool NtpTimeProvider::sync() {
     configTime(gmtOffsetSec_, daylightOffsetSec_, server1_, server2_);
     struct tm timeinfo;
-    if (getLocalTime(&timeinfo, 2000)) {
+    if (getLocalTime(&timeinfo, 50)) {
         time_t now;
         time(&now);
         if (now > 1000000000) {
@@ -24,12 +24,18 @@ bool NtpTimeProvider::isSynchronized() {
     return (now > 1000000000);
 }
 
+uint32_t NtpTimeProvider::epochSeconds() {
+    time_t now = 0;
+    time(&now);
+    return (now > 1000000000) ? static_cast<uint32_t>(now) : 0U;
+}
+
 std::string NtpTimeProvider::isoTimestamp() {
     struct tm timeinfo;
     time_t now;
     time(&now);
 
-    if (now < 1000000000 || !getLocalTime(&timeinfo, 100)) {
+    if (now < 1000000000 || !getLocalTime(&timeinfo, 20)) {
         unsigned long ms = millis();
         char fallback[32];
         snprintf(fallback, sizeof(fallback), "2026-01-01T00:00:%02lu.%03luZ",

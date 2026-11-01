@@ -74,6 +74,28 @@ static bool parseJsonCredentials(const std::string& raw) {
     if (doc.containsKey("ota_hmac_key")) config.ota_hmac_key = doc["ota_hmac_key"].as<String>();
     else if (doc.containsKey("ota_key")) config.ota_hmac_key = doc["ota_key"].as<String>();
 
+    if (doc.containsKey("startup")) {
+        String st = doc["startup"].as<String>();
+        st.toLowerCase();
+        config.startup_mode = (st == "on") ? 1 : (st == "stay" ? 2 : 0);
+    }
+    if (doc.containsKey("pulse")) {
+        String p = doc["pulse"].as<String>();
+        p.toLowerCase();
+        config.pulse_enabled = (p == "on" || p == "1" || p == "true");
+    }
+    if (doc.containsKey("pulseWidth")) {
+        uint32_t pw = doc["pulseWidth"].as<uint32_t>();
+        if (pw >= 500 && pw <= 36000000 && (pw % 500) == 0) {
+            config.pulse_width_ms = pw;
+        }
+    }
+    if (doc.containsKey("sledOnline")) {
+        String sl = doc["sledOnline"].as<String>();
+        sl.toLowerCase();
+        config.sled_online = (sl != "off" && sl != "0" && sl != "false");
+    }
+
     Serial.println("[BLE] Trama JSON de aprovisionamiento procesada con éxito");
     return true;
 }
@@ -131,9 +153,11 @@ static bool parseFrame(const std::string& raw) {
 
 class ServerCallbacks : public NimBLEServerCallbacks {
     void onConnect(NimBLEServer* pServer) override {
+        (void)pServer;
         Serial.println("[BLE] App móvil conectada al dispositivo.");
     }
     void onDisconnect(NimBLEServer* pServer) override {
+        (void)pServer;
         Serial.println("[BLE] App móvil desconectada.");
     }
 };
@@ -269,11 +293,19 @@ public:
 void initBLEProvisioning() {
 }
 
-bool runBLEProvisioning(unsigned long timeoutMs) {
-    Serial.println("\n[BLE] =========================================");
-    Serial.println("[BLE] Iniciando servidor BLE de aprovisionamiento (Estilo Sonoff)...");
-    Serial.println("[BLE] =========================================");
+QuickPairingResult runQuickPairing(unsigned long timeoutMs,
+                                   relay::domain::IIndicator* indicator,
+                                   relay::domain::IButtonHandler* button) {
+    Serial.println("\n[PAIRING] =========================================================");
+    Serial.println("[PAIRING] Iniciando QUICK PAIRING (BLE GATT + SmartConfig ESP-Touch)");
+    Serial.println("[PAIRING] - Pulsación larga (5s): Cambiar a SoftAP VESIS-<ChipID>");
+    Serial.println("[PAIRING] - Pulsación corta:      Salir de modo emparejamiento");
+    Serial.println("[PAIRING] =========================================================");
     _configSaved = false;
+
+    if (indicator) {
+        indicator->show(relay::domain::IndicatorStatus::QuickPairing);
+    }
 
     if (config.device_id.length() == 0) {
         uint64_t chipId = ESP.getEfuseMac();
@@ -294,6 +326,11 @@ bool runBLEProvisioning(unsigned long timeoutMs) {
         config.device_key = String(buf);
     }
 
+    // 1. Activar SmartConfig (ESP-Touch / AirKiss) en paralelo (Sonoff 0x4023AC84)
+    WiFi.mode(WIFI_STA);
+    WiFi.beginSmartConfig();
+
+    // 2. Activar servidor BLE GATT 'RELAY-<DeviceID>'
     String advName = "RELAY-" + config.device_id;
     NimBLEDevice::init(advName.c_str());
     NimBLEDevice::setMTU(512);
@@ -396,26 +433,74 @@ bool runBLEProvisioning(unsigned long timeoutMs) {
     adv->setName(advName.c_str());
     adv->start();
 
-    Serial.printf("[BLE] Publicitando como '%s' durante %lu ms\n", advName.c_str(), timeoutMs);
-    Serial.printf("[BLE] Service UUID: %s\n", SERVICE_UUID);
-    Serial.printf("[BLE] Device ID:    %s\n", config.device_id.c_str());
-    Serial.printf("[BLE] Device Key:   %s\n", config.device_key.c_str());
-    Serial.println("[BLE] Estado: Dispositivo listo para ser reclamado (ready_to_claim)...");
+    Serial.printf("[BLE] Publicitando como '%s' + SmartConfig activo durante %lu ms\n", advName.c_str(), timeoutMs);
+
+    // Esperar a que el usuario suelte el botón de la 1ª pulsación larga antes de evaluar nuevos eventos
+    if (button) {
+        unsigned long releaseWaitStart = millis();
+        while (digitalRead(button->getPin()) == LOW && (millis() - releaseWaitStart) < 3000) {
+            if (indicator) indicator->update();
+            delay(20);
+        }
+        button->init();
+    }
+
+    auto cleanupRadios = [&]() {
+        WiFi.stopSmartConfig();
+        adv->stop();
+        NimBLEDevice::deinit(true);
+    };
 
     unsigned long start = millis();
     while ((millis() - start) < timeoutMs) {
-        if (_configSaved) {
-            Serial.println("[BLE] ¡Aprovisionamiento y enlace a la cuenta completados con éxito!");
-            delay(600);
-            adv->stop();
-            NimBLEDevice::deinit(true);
-            return true;
+        if (indicator) {
+            indicator->update();
         }
-        delay(100);
+
+        // A. ¿Se recibieron credenciales por BLE GATT?
+        if (_configSaved) {
+            Serial.println("[PAIRING] ¡Aprovisionamiento BLE completado con éxito!");
+            delay(600);
+            cleanupRadios();
+            return QuickPairingResult::Provisioned;
+        }
+
+        // B. ¿Se recibieron credenciales por SmartConfig (ESP-Touch / AirKiss)?
+        if (WiFi.smartConfigDone()) {
+            String scSsid = WiFi.SSID();
+            String scPass = WiFi.psk();
+            if (scSsid.length() > 0) {
+                config.wifi_ssid = scSsid;
+                config.wifi_pass = scPass;
+                saveConfig();
+                Serial.printf("[PAIRING] ¡SmartConfig completado! SSID: %s\n", scSsid.c_str());
+                cleanupRadios();
+                return QuickPairingResult::Provisioned;
+            }
+        }
+
+        // C. Evaluar el botón físico durante Quick Pairing (Sonoff 0x402333D8 / 0x40233450)
+        if (button) {
+            auto ev = button->update();
+            if (ev == relay::domain::ButtonEvent::LongPress) {
+                Serial.println("[PAIRING] 2ª pulsación larga (5s) -> Conmutando a SoftAP Compatible (VESIS-<ChipID>)...");
+                cleanupRadios();
+                return QuickPairingResult::SwitchToSoftAp;
+            } else if (ev == relay::domain::ButtonEvent::ShortPress) {
+                Serial.println("[PAIRING] Pulsación corta detectada -> Cancelando modo emparejamiento.");
+                cleanupRadios();
+                return QuickPairingResult::CancelledByButton;
+            }
+        }
+
+        delay(20);
     }
 
-    Serial.println("[BLE] Tiempo de espera agotado (timeout) sin recibir configuración.");
-    adv->stop();
-    NimBLEDevice::deinit(true);
-    return false;
+    Serial.println("[PAIRING] Tiempo de espera de Quick Pairing agotado.");
+    cleanupRadios();
+    return QuickPairingResult::Timeout;
+}
+
+bool runBLEProvisioning(unsigned long timeoutMs) {
+    return runQuickPairing(timeoutMs, nullptr, nullptr) == QuickPairingResult::Provisioned;
 }

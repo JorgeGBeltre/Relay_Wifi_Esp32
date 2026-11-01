@@ -7,8 +7,10 @@
 #include "Application/Services/ConnectivityService.h"
 #include "Application/Services/RelayService.h"
 #include "Application/Services/TelemetryService.h"
+#include "Application/Services/TimerSchedulerService.h"
 #include "Domain/Interfaces/IButtonHandler.h"
 #include "Domain/Interfaces/IClock.h"
+#include "Domain/Interfaces/IConfigRepository.h"
 #include "Domain/Interfaces/IIndicator.h"
 #include "Domain/Interfaces/ILogger.h"
 #include "Domain/Interfaces/IOtaService.h"
@@ -25,6 +27,7 @@ public:
     };
 
     using ApTriggerCallback = std::function<void()>;
+    using StateChangedNotifyCallback = std::function<void()>;
 
     RelayFirmwareController(RelayService& relays,
                             ConnectivityService& connectivity,
@@ -36,11 +39,14 @@ public:
                             domain::IClock& clock,
                             domain::ILogger& logger,
                             const MqttTopics& topics,
-                            ApTriggerCallback apCallback = nullptr);
+                            ApTriggerCallback apCallback = nullptr,
+                            TimerSchedulerService* timerScheduler = nullptr,
+                            domain::IConfigRepository* configRepo = nullptr);
 
     void registerButton(domain::IButtonHandler& button, const std::string& targetDeviceId);
+    void setOnLocalStateChangeCallback(StateChangedNotifyCallback cb) { onStateChangeCb_ = std::move(cb); }
 
-    void setup();
+    void setup(bool relaysAlreadyInitialized = false);
     void tick();
 
     void onMqttConnected();
@@ -56,6 +62,7 @@ private:
 
     void handleButtonEvents();
     void processCommand(const std::string& command);
+    void updateIndicatorForConnectivity();
 
     RelayService&                  relays_;
     ConnectivityService&           connectivity_;
@@ -68,14 +75,20 @@ private:
     domain::ILogger&               log_;
     const MqttTopics               topics_;
     ApTriggerCallback              apCallback_;
+    TimerSchedulerService*         timerScheduler_ = nullptr;
+    domain::IConfigRepository*     configRepo_ = nullptr;
+    StateChangedNotifyCallback     onStateChangeCb_;
 
     std::vector<ButtonBinding>     buttons_;
     State                          state_ = State::Connecting;
 
     unsigned long                  lastStatusPublishMs_ = 0;
     unsigned long                  lastTimeSyncMs_ = 0;
+    unsigned long                  lastConnectAttemptMs_ = 0;
+    uint32_t                       lastEvaluatedEpochSec_ = 0;
     static constexpr unsigned long STATUS_INTERVAL_MS = 3600000;
     static constexpr unsigned long TIME_SYNC_INTERVAL_MS = 3600000;
+    static constexpr unsigned long RECONNECT_BACKOFF_MS = 5000;
 };
 
 }
