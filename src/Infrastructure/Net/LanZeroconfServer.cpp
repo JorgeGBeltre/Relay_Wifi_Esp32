@@ -1,13 +1,43 @@
 #include "Infrastructure/Net/LanZeroconfServer.h"
 #include "Application/Services/CryptoUtils.h"
+#include "Application/Services/TimerJsonCodec.h"
 #include "Infrastructure/Config/config.h"
 #include "Infrastructure/Config/nvs_config.h"
 #include "Infrastructure/Messaging/mqtt_client.h"
 #include <ArduinoJson.h>
 #include <ESPmDNS.h>
 #include <WiFi.h>
+#include <mbedtls/sha256.h>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
+
+namespace {
+
+void computeLanProofHex(const std::string& deviceKey,
+                        const std::string& chipId,
+                        const std::string& localIp,
+                        char outHex[33]) {
+    outHex[0] = '\0';
+    if (deviceKey.empty() || chipId.empty() || localIp.empty()) {
+        return;
+    }
+    const std::string input = deviceKey + ":" + chipId + ":" + localIp;
+    uint8_t digest[32] = {0};
+    mbedtls_sha256_context ctx;
+    mbedtls_sha256_init(&ctx);
+    mbedtls_sha256_starts_ret(&ctx, 0);
+    mbedtls_sha256_update_ret(&ctx, reinterpret_cast<const unsigned char*>(input.data()), input.size());
+    mbedtls_sha256_finish_ret(&ctx, digest);
+    mbedtls_sha256_free(&ctx);
+
+    for (size_t i = 0; i < 16; ++i) {
+        std::snprintf(outHex + (i * 2), 3, "%02x", digest[i]);
+    }
+    outHex[32] = '\0';
+}
+
+} // namespace
 
 namespace relay::infra {
 
@@ -30,10 +60,19 @@ LanZeroconfServer::LanZeroconfServer(app::RelayService& relays,
       server_(port) {}
 
 void LanZeroconfServer::registerEndpoint(const char* uri) {
+    server_.on(uri, HTTP_OPTIONS, [this]() {
+        server_.sendHeader("Access-Control-Allow-Origin", "*");
+        server_.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        server_.sendHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+        server_.sendHeader("Access-Control-Allow-Private-Network", "true");
+        server_.send(204, "text/plain", "");
+    });
     server_.on(uri, HTTP_POST, [this, uri]() {
         String body = server_.arg("plain");
-        char responseBuf[768] = {0};
+        char responseBuf[2048] = {0};
         dispatchZeroconf(uri, body, responseBuf, sizeof(responseBuf));
+        server_.sendHeader("Access-Control-Allow-Origin", "*");
+        server_.sendHeader("Access-Control-Allow-Private-Network", "true");
         server_.send(200, "application/json", responseBuf);
     });
 }
@@ -64,8 +103,10 @@ void LanZeroconfServer::startServer() {
     registerEndpoint("/zeroconf/ota_unlock");
 
     server_.on("/zeroconf/info", HTTP_GET, [this]() {
-        char responseBuf[768] = {0};
+        char responseBuf[2048] = {0};
         dispatchZeroconf("/zeroconf/info", String("{}"), responseBuf, sizeof(responseBuf));
+        server_.sendHeader("Access-Control-Allow-Origin", "*");
+        server_.sendHeader("Access-Control-Allow-Private-Network", "true");
         server_.send(200, "application/json", responseBuf);
     });
 
@@ -199,20 +240,20 @@ void LanZeroconfServer::dispatchZeroconf(const char* uri, const String& rawBody,
                       sequence_, sequence_, errCode);
     };
 
-    if (rawBody.length() == 0 || rawBody.length() > 1024) {
+    if (rawBody.length() == 0 || rawBody.length() > 2560) {
         writeError(400);
         return;
     }
 
-    StaticJsonDocument<768> outerDoc;
+    DynamicJsonDocument outerDoc(2560);
     if (deserializeJson(outerDoc, rawBody) != DeserializationError::Ok) {
         writeError(400);
         return;
     }
 
     bool isEncrypted = outerDoc["encrypt"].as<bool>();
-    char decryptedJson[512] = {0};
-    StaticJsonDocument<512> innerDoc;
+    char decryptedJson[1536] = {0};
+    DynamicJsonDocument innerDoc(2048);
     JsonVariant dataObj;
 
     domain::DeviceConfig devCfg;
@@ -399,8 +440,12 @@ void LanZeroconfServer::dispatchZeroconf(const char* uri, const String& rawBody,
         const bool wifiConn = (WiFi.status() == WL_CONNECTED);
         const bool mqttConn = isMQTTConnected();
         const char* cfgState = resolveDeviceConfigState(wifiConn, mqttConn);
+        const String liveSsid = wifiConn ? WiFi.SSID() : config.wifi_ssid;
+        const String localIp = wifiConn ? WiFi.localIP().toString() : String("");
+        char lanProofHex[33] = {0};
+        computeLanProofHex(devCfg.deviceKey, activeDeviceId_, std::string(localIp.c_str()), lanProofHex);
 
-        StaticJsonDocument<768> respDoc;
+        DynamicJsonDocument respDoc(2048);
         respDoc["sequence"] = String(sequence_);
         respDoc["seq"]      = sequence_;
         respDoc["error"]    = 0;
@@ -428,7 +473,17 @@ void LanZeroconfServer::dispatchZeroconf(const char* uri, const String& rawBody,
         d["has_broker_credentials"] = hasValidBrokerCredentials();
         d["wifi_connected"]         = wifiConn;
         d["mqtt_connected"]         = mqttConn;
+        d["ssid"]                   = liveSsid;
         d["configured_ssid"]        = config.wifi_ssid;
+        if (wifiConn) {
+            d["bssid"]              = WiFi.BSSIDstr();
+            d["local_ip"]           = localIp;
+        }
+        if (lanProofHex[0] != '\0') {
+            d["lan_proof"]          = lanProofHex;
+        }
+        JsonArray timersArr = d.createNestedArray("timers");
+        app::TimerJsonCodec::serializeTimersToJsonArray(timerScheduler_, timersArr);
         serializeJson(respDoc, respBuf, respBufSize);
         return;
     }
@@ -475,32 +530,18 @@ void LanZeroconfServer::dispatchZeroconf(const char* uri, const String& rawBody,
             writeError(400);
             return;
         }
-        timerScheduler_.clearAllTimers();
-        uint8_t nextId = 1;
-        for (JsonVariant item : dataObj["timers"].as<JsonArray>()) {
-            domain::ScheduledTimer t{};
-            t.id = item["id"] | nextId++;
-            t.enabled = (item["enabled"] | 1) != 0;
-            const char* tp = item["type"] | "once";
-            if (std::strcmp(tp, "repeat") == 0) t.type = domain::TimerType::Repeat;
-            else if (std::strcmp(tp, "duration") == 0) t.type = domain::TimerType::Duration;
-            else t.type = domain::TimerType::Once;
-
-            const char* doSw = item["do"]["switch"] | "off";
-            t.targetAction = (std::strcmp(doSw, "on") == 0);
-            const char* startSw = item["startDo"]["switch"] | "on";
-            const char* endSw = item["endDo"]["switch"] | "off";
-            t.startAction = (std::strcmp(startSw, "on") == 0);
-            t.endAction = (std::strcmp(endSw, "on") == 0);
-            t.targetEpochSec = item["at"] | 0U;
-            t.weekdaysMask = item["weekdays"] | 0x7FU;
-            t.hourUtc = item["hour"] | 0U;
-            t.minuteUtc = item["minute"] | 0U;
-            t.cycleStartEpochSec = item["startAt"] | 0U;
-            t.cyclePeriodSec = item["periodSec"] | 0U;
-            t.cycleOnDurationSec = item["onDurationSec"] | 0U;
-            timerScheduler_.upsertTimer(t);
+        const uint32_t nowEpoch = static_cast<uint32_t>(std::time(nullptr));
+        app::TimerJsonCodec::applyTimersFromJsonArray(
+            dataObj["timers"].as<JsonArrayConst>(),
+            timerScheduler_,
+            nowEpoch > 1000000000U ? nowEpoch : 0U);
+        if (isMQTTConnected()) {
+            telemetry_.publishEvent(
+                "TIMERS_UPDATED",
+                "Temporizadores sincronizados por LAN: " + std::to_string(timerScheduler_.getActiveTimerCount()) + " activos");
+            telemetry_.publishStatus();
         }
+        notifyMdnsStateChange();
         writeError(0);
         return;
     }

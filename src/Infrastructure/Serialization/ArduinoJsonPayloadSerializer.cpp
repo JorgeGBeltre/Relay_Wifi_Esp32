@@ -1,4 +1,6 @@
 #include "Infrastructure/Serialization/ArduinoJsonPayloadSerializer.h"
+#include "Infrastructure/Config/nvs_config.h"
+#include "Domain/Entities/DeviceConfig.h"
 #include <ArduinoJson.h>
 
 namespace relay::infra {
@@ -10,7 +12,7 @@ std::string ArduinoJsonPayloadSerializer::formatStatus(
     const std::string& timestamp,
     bool syncCompleted) {
 
-    DynamicJsonDocument doc(2048);
+    DynamicJsonDocument doc(2560);
 
     JsonObject dev = doc.createNestedObject("Device");
     dev["status"] = metrics.mqttConnected ? "connected" : "disconnected";
@@ -30,6 +32,21 @@ std::string ArduinoJsonPayloadSerializer::formatStatus(
     details["rssi"] = metrics.rssi;
     details["free_heap"] = metrics.freeHeap;
     details["uptime"] = metrics.uptime;
+    if (!metrics.wifiSsid.empty()) {
+        details["wifi_ssid"] = metrics.wifiSsid;
+    } else if (config.wifi_ssid.length() > 0) {
+        details["wifi_ssid"] = config.wifi_ssid.c_str();
+    }
+    if (!metrics.wifiBssid.empty()) {
+        details["wifi_bssid"] = metrics.wifiBssid;
+    }
+    if (!metrics.localIp.empty()) {
+        details["local_ip"] = metrics.localIp;
+    }
+    details["startup"] = domain::startupModeToString(static_cast<domain::StartupMode>(config.startup_mode));
+    details["pulse"] = config.pulse_enabled ? "on" : "off";
+    details["pulseWidth"] = config.pulse_width_ms;
+    details["sledOnline"] = config.sled_online ? "on" : "off";
 
     JsonObject devicesObj = details.createNestedObject("devices");
     for (const auto& r : relays) {
@@ -84,7 +101,7 @@ std::string ArduinoJsonPayloadSerializer::formatTelemetry(
     const std::vector<domain::RelayState>& relays,
     const std::string& timestamp) {
 
-    DynamicJsonDocument doc(1536);
+    DynamicJsonDocument doc(1792);
 
     JsonObject dev = doc.createNestedObject("Device");
     dev["status"] = metrics.mqttConnected ? "connected" : "disconnected";
@@ -99,6 +116,12 @@ std::string ArduinoJsonPayloadSerializer::formatTelemetry(
     details["rssi"] = metrics.rssi;
     details["free_heap"] = metrics.freeHeap;
     details["uptime"] = metrics.uptime;
+    if (!metrics.wifiSsid.empty()) {
+        details["wifi_ssid"] = metrics.wifiSsid;
+    }
+    if (!metrics.localIp.empty()) {
+        details["local_ip"] = metrics.localIp;
+    }
 
     details["devices_count"] = relays.size();
     details["channel_count"] = relays.size();

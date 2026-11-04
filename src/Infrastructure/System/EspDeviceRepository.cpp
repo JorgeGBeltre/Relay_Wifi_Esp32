@@ -27,6 +27,11 @@ domain::SystemMetrics EspDeviceRepository::metrics() {
     m.uptime = millis();
     m.wifiConnected = (WiFi.status() == WL_CONNECTED);
     m.mqttConnected = false;
+    if (m.wifiConnected) {
+        m.wifiSsid = WiFi.SSID().c_str();
+        m.wifiBssid = WiFi.BSSIDstr().c_str();
+        m.localIp = WiFi.localIP().toString().c_str();
+    }
     return m;
 }
 

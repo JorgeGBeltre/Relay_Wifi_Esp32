@@ -1,4 +1,6 @@
 #include "Application/Controllers/RelayFirmwareController.h"
+#include "Application/Services/TimerJsonCodec.h"
+#include <ArduinoJson.h>
 #include <cstdlib>
 #include <cstring>
 
@@ -76,6 +78,12 @@ void RelayFirmwareController::onMqttConnected() {
 
     connectivity_.transport().subscribe(topics_.commands);
     connectivity_.transport().subscribe(topics_.deviceEvents);
+    if (!topics_.timersCommand.empty()) {
+        connectivity_.transport().subscribe(topics_.timersCommand);
+    }
+    if (!topics_.wifiCommand.empty()) {
+        connectivity_.transport().subscribe(topics_.wifiCommand);
+    }
 
     for (const auto& r : relays_.getAllStates()) {
         connectivity_.transport().subscribe(topics_.relay(r.topic, "/state"));
@@ -201,7 +209,26 @@ void RelayFirmwareController::handleButtonEvents() {
 
 void RelayFirmwareController::handleIncomingMessage(const std::string& topic, const std::string& payload) {
     const unsigned long now = clock_.nowMs();
-    log_.info("[CTRL] Mensaje recibido en [" + topic + "]: " + payload);
+    const bool containsSensitiveWifi =
+        (!topics_.wifiCommand.empty() && topic == topics_.wifiCommand) ||
+        payload.find("\"password\"") != std::string::npos ||
+        payload.find("\"wifi_pass\"") != std::string::npos;
+
+    if (containsSensitiveWifi) {
+        log_.info("[CTRL] Mensaje recibido en [" + topic + "]: [WIFI_CREDENTIALS_REDACTED]");
+    } else {
+        log_.info("[CTRL] Mensaje recibido en [" + topic + "]: " + payload);
+    }
+
+    if (!topics_.timersCommand.empty() && topic == topics_.timersCommand) {
+        handleTimersPayload(payload);
+        return;
+    }
+
+    if (!topics_.wifiCommand.empty() && topic == topics_.wifiCommand) {
+        handleWifiPayload(payload);
+        return;
+    }
 
     if (topic == topics_.commands || topic == topics_.deviceEvents) {
         processCommand(payload);
@@ -285,6 +312,15 @@ void RelayFirmwareController::processCommand(const std::string& rawCmd) {
         const bool isAllCmd = (lower.find("\"set_power_all\"") != std::string::npos ||
                                lower.find("\"all\":true") != std::string::npos);
         const int targetCh = extractChannelFromJson(lower);
+
+        if (lower.find("\"set_timers\"") != std::string::npos || lower.find("\"timers\":[") != std::string::npos) {
+            handleTimersPayload(rawCmd);
+            return;
+        }
+        if (lower.find("\"set_wifi\"") != std::string::npos) {
+            handleWifiPayload(rawCmd);
+            return;
+        }
 
         if (lower.find("\"reset\"") != std::string::npos || lower.find("\"reboot\"") != std::string::npos) {
             cmd = "reset";
@@ -401,6 +437,90 @@ void RelayFirmwareController::processCommand(const std::string& rawCmd) {
         }
         telemetry_.publishEvent("SLED_CONFIG_CHANGED", std::string("Indicador LED online: ") + (en ? "on" : "off"));
         if (onStateChangeCb_) onStateChangeCb_();
+    }
+}
+
+void RelayFirmwareController::handleTimersPayload(const std::string& payload) {
+    if (!timerScheduler_) {
+        return;
+    }
+
+    DynamicJsonDocument doc(2560);
+    if (deserializeJson(doc, payload) != DeserializationError::Ok) {
+        log_.warn("[CTRL] Payload de temporizadores inválido (JSON malformado)");
+        telemetry_.publishEvent("TIMERS_UPDATE_FAILED", "Payload JSON de temporizadores inválido");
+        return;
+    }
+
+    JsonArrayConst timersArr;
+    if (doc.is<JsonArray>()) {
+        timersArr = doc.as<JsonArrayConst>();
+    } else if (doc["timers"].is<JsonArray>()) {
+        timersArr = doc["timers"].as<JsonArrayConst>();
+    } else if (doc["payload"]["timers"].is<JsonArray>()) {
+        timersArr = doc["payload"]["timers"].as<JsonArrayConst>();
+    } else if (doc["payload"].is<const char*>()) {
+        DynamicJsonDocument innerDoc(2560);
+        if (deserializeJson(innerDoc, doc["payload"].as<const char*>()) == DeserializationError::Ok) {
+            if (innerDoc.is<JsonArray>()) {
+                TimerJsonCodec::applyTimersFromJsonArray(innerDoc.as<JsonArrayConst>(), *timerScheduler_, timeProvider_.epochSeconds());
+                telemetry_.publishEvent("TIMERS_UPDATED", "Temporizadores sincronizados por MQTT5: " + std::to_string(timerScheduler_->getActiveTimerCount()) + " activos");
+                telemetry_.publishStatus();
+                if (onStateChangeCb_) onStateChangeCb_();
+                return;
+            } else if (innerDoc["timers"].is<JsonArray>()) {
+                TimerJsonCodec::applyTimersFromJsonArray(innerDoc["timers"].as<JsonArrayConst>(), *timerScheduler_, timeProvider_.epochSeconds());
+                telemetry_.publishEvent("TIMERS_UPDATED", "Temporizadores sincronizados por MQTT5: " + std::to_string(timerScheduler_->getActiveTimerCount()) + " activos");
+                telemetry_.publishStatus();
+                if (onStateChangeCb_) onStateChangeCb_();
+                return;
+            }
+        }
+        telemetry_.publishEvent("TIMERS_UPDATE_FAILED", "No se encontró el arreglo timers");
+        return;
+    } else {
+        telemetry_.publishEvent("TIMERS_UPDATE_FAILED", "No se encontró el arreglo timers");
+        return;
+    }
+
+    TimerJsonCodec::applyTimersFromJsonArray(timersArr, *timerScheduler_, timeProvider_.epochSeconds());
+    telemetry_.publishEvent(
+        "TIMERS_UPDATED",
+        "Temporizadores sincronizados por MQTT5: " + std::to_string(timerScheduler_->getActiveTimerCount()) + " activos");
+    telemetry_.publishStatus();
+    if (onStateChangeCb_) onStateChangeCb_();
+}
+
+void RelayFirmwareController::handleWifiPayload(const std::string& payload) {
+    StaticJsonDocument<768> doc;
+    if (deserializeJson(doc, payload) != DeserializationError::Ok) {
+        log_.warn("[CTRL] Solicitud MQTT5 de cambio Wi-Fi inválida");
+        telemetry_.publishEvent("WIFI_UPDATE_FAILED", "Solicitud JSON de cambio Wi-Fi inválida");
+        return;
+    }
+
+    JsonObjectConst root = doc.as<JsonObjectConst>();
+    if (doc["payload"].is<JsonObject>()) {
+        root = doc["payload"].as<JsonObjectConst>();
+    }
+
+    const char* rawSsid = root["ssid"] | (root["wifi_ssid"] | nullptr);
+    const char* rawPass = root["password"] | (root["wifi_pass"] | "");
+    const char* rawReqId = root["request_id"] | (root["requestId"] | "");
+
+    if (!rawSsid || std::strlen(rawSsid) == 0 || std::strlen(rawSsid) > 32 ||
+        (rawPass && std::strlen(rawPass) > 64)) {
+        log_.warn("[CTRL] Parámetros SSID/longitud inválidos en solicitud Wi-Fi MQTT5");
+        telemetry_.publishEvent("WIFI_UPDATE_FAILED", "SSID inválido o fuera de rango (1..32 bytes)");
+        return;
+    }
+
+    log_.info(std::string("[CTRL] Solicitud MQTT5 de adopción Wi-Fi aceptada hacia SSID: ") + rawSsid);
+    if (onWifiChangeRequestCb_) {
+        onWifiChangeRequestCb_(
+            std::string(rawSsid),
+            rawPass ? std::string(rawPass) : std::string(),
+            rawReqId ? std::string(rawReqId) : std::string());
     }
 }
 

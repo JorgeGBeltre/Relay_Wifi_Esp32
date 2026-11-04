@@ -20,14 +20,17 @@ public:
 
     void loadFromStorage();
     bool upsertTimer(const domain::ScheduledTimer& timer);
+    bool replaceAllTimers(const domain::ScheduledTimer* entries, size_t count);
     void clearAllTimers();
     size_t getActiveTimerCount() const;
+    const domain::ScheduledTimer* getTimers() const { return timers_; }
 
     // Evalúa los temporizadores una vez por segundo contra el epoch UTC actual
     size_t evaluate(uint32_t currentEpochSec, unsigned long nowMs = 0);
 
 private:
     void saveToStorage();
+    size_t applyActionToTarget(uint8_t channel, bool action, unsigned long nowMs, bool onlyIfChanged = false);
 
     RelayService& relays_;
     std::string targetDeviceId_;

@@ -64,6 +64,111 @@ static infra::LanZeroconfServer*     g_lanServer = nullptr;
 
 static std::string g_activeDeviceId;
 
+struct PendingWifiAdoption {
+    bool pending = false;
+    std::string targetSsid;
+    std::string targetPass;
+    std::string requestId;
+    unsigned long executeAfterMs = 0;
+};
+
+static PendingWifiAdoption g_pendingWifiAdoption;
+
+static void executeHotWifiAdoption(const std::string& targetSsid,
+                                   const std::string& targetPass,
+                                   const std::string& requestId) {
+    domain::DeviceConfig currentCfg;
+    g_configRepo.load(currentCfg);
+
+    const std::string prevSsid = currentCfg.wifiSsid;
+    const std::string prevPass = currentCfg.wifiPass;
+
+    Serial.printf("[WIFI-MQTT5] Probando adopción de nueva red Wi-Fi '%s'...\n", targetSsid.c_str());
+
+    infra::disconnectMQTT();
+    if (g_lanServer) {
+        g_lanServer->loop(false);
+    }
+
+    WiFi.disconnect(false, false);
+    delay(120);
+    WiFi.mode(WIFI_STA);
+    if (targetPass.empty()) {
+        WiFi.begin(targetSsid.c_str());
+    } else {
+        WiFi.begin(targetSsid.c_str(), targetPass.c_str());
+    }
+
+    const unsigned long startMs = millis();
+    wl_status_t lastStatus = WL_IDLE_STATUS;
+    while ((millis() - startMs) < 15000UL) {
+        lastStatus = WiFi.status();
+        if (lastStatus == WL_CONNECTED) {
+            break;
+        }
+        g_indicator.show(domain::IndicatorStatus::Connecting);
+        g_indicator.update();
+        delay(150);
+    }
+
+    const char* broker = !currentCfg.mqttBroker.empty() ? currentCfg.mqttBroker.c_str() : MQTT_SERVER;
+    int port = currentCfg.mqttPort > 0 ? currentCfg.mqttPort : MQTT_PORT;
+    const char* apiKey = !currentCfg.mqttUser.empty() ? currentCfg.mqttUser.c_str() : API_KEY;
+    const char* devId = !g_activeDeviceId.empty()
+        ? g_activeDeviceId.c_str()
+        : (!currentCfg.deviceId.empty() ? currentCfg.deviceId.c_str() : "RELAY");
+
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.printf("[WIFI-MQTT5] Conectado con éxito a '%s' (IP: %s). Guardando en NVS...\n",
+                      targetSsid.c_str(), WiFi.localIP().toString().c_str());
+        currentCfg.wifiSsid = targetSsid;
+        currentCfg.wifiPass = targetPass;
+        g_configRepo.save(currentCfg);
+        saveLastWifiErrorNvs("");
+        g_wifi.setCredentials(targetSsid, targetPass);
+
+        infra::initMQTT(broker, port, devId, apiKey, root_ca_pem, FIRMWARE_VERSION);
+        if (hasValidBrokerCredentials() && infra::connectMQTT()) {
+            g_timeProvider.sync();
+            if (g_telemetry) {
+                std::string desc = "Red Wi-Fi actualizada por MQTT5 a '" + targetSsid + "'";
+                if (!requestId.empty()) {
+                    desc += " (req=" + requestId + ")";
+                }
+                g_telemetry->publishEvent("WIFI_UPDATED", desc);
+                g_telemetry->publishStatus();
+            }
+        }
+        return;
+    }
+
+    const char* failReason = "timeout";
+    if (lastStatus == WL_NO_SSID_AVAIL) {
+        failReason = "ap_not_found";
+    } else if (lastStatus == WL_CONNECT_FAILED) {
+        failReason = "auth_failed";
+    }
+
+    Serial.printf("[WIFI-MQTT5] Falló conexión a '%s' (%s). Revirtiendo a '%s'...\n",
+                  targetSsid.c_str(), failReason, prevSsid.c_str());
+
+    WiFi.disconnect(false, false);
+    delay(120);
+    g_wifi.setCredentials(prevSsid, prevPass);
+    if (!prevSsid.empty()) {
+        g_wifi.connect();
+    }
+
+    infra::initMQTT(broker, port, devId, apiKey, root_ca_pem, FIRMWARE_VERSION);
+    if (WiFi.status() == WL_CONNECTED && hasValidBrokerCredentials() && infra::connectMQTT()) {
+        if (g_telemetry) {
+            std::string desc = "No se pudo adoptar la red '" + targetSsid + "' (" + failReason + "); se mantuvo '" + prevSsid + "'";
+            g_telemetry->publishEvent("WIFI_UPDATE_FAILED", desc);
+            g_telemetry->publishStatus();
+        }
+    }
+}
+
 static void reloadRuntimeConnectivity() {
     domain::DeviceConfig updatedCfg;
     g_configRepo.load(updatedCfg);
@@ -252,6 +357,14 @@ void setup() {
             g_lanServer->notifyMdnsStateChange();
         }
     });
+    controller.setOnWifiChangeRequestCallback(
+        [](const std::string& ssid, const std::string& password, const std::string& requestId) {
+            g_pendingWifiAdoption.pending = true;
+            g_pendingWifiAdoption.targetSsid = ssid;
+            g_pendingWifiAdoption.targetPass = password;
+            g_pendingWifiAdoption.requestId = requestId;
+            g_pendingWifiAdoption.executeAfterMs = millis() + 250UL;
+        });
 
     controller.setup(true);
     g_controller = &controller;
@@ -267,6 +380,12 @@ void loop() {
     }
     if (g_lanServer) {
         g_lanServer->loop(g_wifi.isConnected());
+    }
+    if (g_pendingWifiAdoption.pending &&
+        static_cast<long>(millis() - g_pendingWifiAdoption.executeAfterMs) >= 0) {
+        PendingWifiAdoption req = g_pendingWifiAdoption;
+        g_pendingWifiAdoption = PendingWifiAdoption{};
+        executeHotWifiAdoption(req.targetSsid, req.targetPass, req.requestId);
     }
     delay(5);
 }

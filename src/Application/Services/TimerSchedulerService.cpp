@@ -1,4 +1,6 @@
 #include "Application/Services/TimerSchedulerService.h"
+#include <cstdio>
+#include <cstring>
 
 namespace relay::app {
 
@@ -30,11 +32,34 @@ void TimerSchedulerService::saveToStorage() {
     configRepo_->saveTimers(timers_, MAX_TIMERS);
 }
 
+bool TimerSchedulerService::replaceAllTimers(const domain::ScheduledTimer* entries, size_t count) {
+    for (size_t i = 0; i < MAX_TIMERS; ++i) {
+        timers_[i] = domain::ScheduledTimer{};
+    }
+    const size_t safeCount = (count > MAX_TIMERS) ? MAX_TIMERS : count;
+    for (size_t i = 0; i < safeCount && entries != nullptr; ++i) {
+        domain::ScheduledTimer entry = entries[i];
+        if (entry.id == 0) {
+            entry.id = static_cast<uint8_t>(i + 1U);
+        }
+        if (entry.externalId[0] == '\0') {
+            std::snprintf(entry.externalId, sizeof(entry.externalId), "%u", static_cast<unsigned>(entry.id));
+        }
+        entry.lastTriggeredMinute = 0;
+        timers_[i] = entry;
+    }
+    saveToStorage();
+    return true;
+}
+
 bool TimerSchedulerService::upsertTimer(const domain::ScheduledTimer& timer) {
     domain::ScheduledTimer entry = timer;
     if (entry.id != 0) {
         for (size_t i = 0; i < MAX_TIMERS; ++i) {
             if (timers_[i].id == entry.id) {
+                if (entry.externalId[0] == '\0') {
+                    std::snprintf(entry.externalId, sizeof(entry.externalId), "%u", static_cast<unsigned>(entry.id));
+                }
                 timers_[i] = entry;
                 saveToStorage();
                 return true;
@@ -45,6 +70,9 @@ bool TimerSchedulerService::upsertTimer(const domain::ScheduledTimer& timer) {
         if (timers_[i].id == 0) {
             if (entry.id == 0) {
                 entry.id = static_cast<uint8_t>(i + 1);
+            }
+            if (entry.externalId[0] == '\0') {
+                std::snprintf(entry.externalId, sizeof(entry.externalId), "%u", static_cast<unsigned>(entry.id));
             }
             timers_[i] = entry;
             saveToStorage();
@@ -64,9 +92,43 @@ void TimerSchedulerService::clearAllTimers() {
 size_t TimerSchedulerService::getActiveTimerCount() const {
     size_t count = 0;
     for (size_t i = 0; i < MAX_TIMERS; ++i) {
-        if (timers_[i].enabled) ++count;
+        if (timers_[i].id != 0 && timers_[i].enabled) ++count;
     }
     return count;
+}
+
+size_t TimerSchedulerService::applyActionToTarget(uint8_t channel, bool action, unsigned long nowMs, bool onlyIfChanged) {
+    const auto allStates = relays_.getAllStates();
+    if (allStates.empty()) {
+        const auto* st = relays_.getState(targetDeviceId_);
+        if (onlyIfChanged && st && st->currentState == action) {
+            return 0;
+        }
+        relays_.setDesiredState(targetDeviceId_, action);
+        relays_.applyDesiredState(targetDeviceId_, nowMs);
+        return 1;
+    }
+
+    size_t changed = 0;
+    if (channel == 0) {
+        for (const auto& r : allStates) {
+            if (onlyIfChanged && r.currentState == action) continue;
+            relays_.setDesiredState(r.deviceId, action);
+            relays_.applyDesiredState(r.deviceId, nowMs);
+            ++changed;
+        }
+        return changed;
+    }
+
+    const size_t idx = (static_cast<size_t>(channel - 1U) < allStates.size())
+        ? static_cast<size_t>(channel - 1U)
+        : 0U;
+    if (onlyIfChanged && allStates[idx].currentState == action) {
+        return 0;
+    }
+    relays_.setDesiredState(allStates[idx].deviceId, action);
+    relays_.applyDesiredState(allStates[idx].deviceId, nowMs);
+    return 1;
 }
 
 size_t TimerSchedulerService::evaluate(uint32_t currentEpochSec, unsigned long nowMs) {
@@ -84,33 +146,41 @@ size_t TimerSchedulerService::evaluate(uint32_t currentEpochSec, unsigned long n
 
     for (size_t i = 0; i < MAX_TIMERS; ++i) {
         auto& t = timers_[i];
-        if (!t.enabled) continue;
+        if (t.id == 0 || !t.enabled) continue;
 
         if (t.type == domain::TimerType::Once) {
-            if (currentEpochSec >= t.targetEpochSec && (currentEpochSec - t.targetEpochSec) <= 5U) {
-                relays_.setDesiredState(targetDeviceId_, t.targetAction);
-                relays_.applyDesiredState(targetDeviceId_, nowMs);
+            if (t.targetEpochSec > 0 && currentEpochSec >= t.targetEpochSec) {
+                if ((currentEpochSec - t.targetEpochSec) <= 60U) {
+                    applyActionToTarget(t.channel, t.targetAction, nowMs, false);
+                    ++triggeredCount;
+                }
                 t.enabled = false;
                 statePersistedNeeded = true;
-                ++triggeredCount;
             }
         } else if (t.type == domain::TimerType::Repeat) {
-            const bool dayMatch = (t.weekdaysMask & (1U << weekday)) != 0;
+            const bool isOneShotSchedule = (t.weekdaysMask == 0);
+            const bool dayMatch = isOneShotSchedule || ((t.weekdaysMask & (1U << weekday)) != 0);
             if (dayMatch && hour == t.hourUtc && minute == t.minuteUtc &&
-                second < 5U && t.lastTriggeredMinute != currentEpochMinute) {
+                second < 15U && t.lastTriggeredMinute != currentEpochMinute) {
                 t.lastTriggeredMinute = currentEpochMinute;
-                relays_.setDesiredState(targetDeviceId_, t.targetAction);
-                relays_.applyDesiredState(targetDeviceId_, nowMs);
+                applyActionToTarget(t.channel, t.targetAction, nowMs, false);
                 ++triggeredCount;
+                if (isOneShotSchedule) {
+                    t.enabled = false;
+                    statePersistedNeeded = true;
+                }
             }
         } else if (t.type == domain::TimerType::Duration) {
-            if (currentEpochSec >= t.cycleStartEpochSec && t.cyclePeriodSec > 0) {
-                const uint32_t elapsed = (currentEpochSec - t.cycleStartEpochSec) % t.cyclePeriodSec;
+            if (t.cyclePeriodSec >= 2U && t.cycleOnDurationSec > 0U && t.cycleOnDurationSec < t.cyclePeriodSec) {
+                const uint32_t anchor = (t.cycleStartEpochSec > 0U && currentEpochSec >= t.cycleStartEpochSec)
+                    ? t.cycleStartEpochSec
+                    : currentEpochSec;
+                const uint32_t elapsed = (currentEpochSec - anchor) % t.cyclePeriodSec;
                 const bool desiredAction = (elapsed < t.cycleOnDurationSec) ? t.startAction : t.endAction;
-                const auto* current = relays_.getState(targetDeviceId_);
-                if (current && current->currentState != desiredAction) {
-                    relays_.setDesiredState(targetDeviceId_, desiredAction);
-                    relays_.applyDesiredState(targetDeviceId_, nowMs);
+                const uint32_t phaseToken = desiredAction ? 2U : 1U;
+                if (t.lastTriggeredMinute != phaseToken) {
+                    t.lastTriggeredMinute = phaseToken;
+                    applyActionToTarget(t.channel, desiredAction, nowMs, false);
                     ++triggeredCount;
                 }
             }
@@ -124,4 +194,3 @@ size_t TimerSchedulerService::evaluate(uint32_t currentEpochSec, unsigned long n
 }
 
 } // namespace relay::app
-

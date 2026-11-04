@@ -183,9 +183,12 @@ bool saveSledOnlineNvs(bool enabled) {
 bool saveTimersNvs(const relay::domain::ScheduledTimer* timers, size_t count) {
     if (!preferences.begin("relay-config", false)) return false;
     const size_t safeCount = (count > 8) ? 8 : count;
+    preferences.putUChar("tmr_ver", 2);
     preferences.putUChar("tmr_cnt", static_cast<uint8_t>(safeCount));
     if (safeCount > 0 && timers) {
         preferences.putBytes("tmr_blob", timers, safeCount * sizeof(relay::domain::ScheduledTimer));
+    } else {
+        preferences.remove("tmr_blob");
     }
     preferences.end();
     return true;
@@ -194,10 +197,20 @@ bool saveTimersNvs(const relay::domain::ScheduledTimer* timers, size_t count) {
 size_t loadTimersNvs(relay::domain::ScheduledTimer* timers, size_t maxCount) {
     if (!timers || maxCount == 0) return 0;
     if (!preferences.begin("relay-config", true)) return 0;
+    const uint8_t storedVer = preferences.getUChar("tmr_ver", 0);
+    if (storedVer != 2) {
+        preferences.end();
+        return 0;
+    }
     const uint8_t storedCount = preferences.getUChar("tmr_cnt", 0);
     const size_t safeCount = (storedCount > maxCount) ? maxCount : storedCount;
+    const size_t expectedBytes = safeCount * sizeof(relay::domain::ScheduledTimer);
     if (safeCount > 0) {
-        preferences.getBytes("tmr_blob", timers, safeCount * sizeof(relay::domain::ScheduledTimer));
+        if (preferences.getBytesLength("tmr_blob") != expectedBytes) {
+            preferences.end();
+            return 0;
+        }
+        preferences.getBytes("tmr_blob", timers, expectedBytes);
     }
     preferences.end();
     return safeCount;
