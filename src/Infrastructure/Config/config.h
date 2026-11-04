@@ -32,9 +32,24 @@ inline const char* root_ca_pem = \
 "YOUR_SSL_CERTIFICATE_HERE\n" \
 "-----END CERTIFICATE-----\n";
 
+#ifndef RELAY_CHANNEL_COUNT
+  #define RELAY_CHANNEL_COUNT 1
+#endif
+
 constexpr uint8_t RelayPin1 = 4;
+constexpr uint8_t RelayPin2 = 16;
+constexpr uint8_t RelayPin3 = 17;
+constexpr uint8_t RelayPin4 = 18;
 constexpr uint8_t BUTTON_PIN1 = 0;
+constexpr uint8_t BUTTON_PIN2 = 32;
+constexpr uint8_t BUTTON_PIN3 = 33;
+constexpr uint8_t BUTTON_PIN4 = 25;
 constexpr uint8_t wifiLed = 2;
+
+constexpr const char* RELAY_MODEL_NAME =
+    (RELAY_CHANNEL_COUNT == 4) ? "Relay-Wifi-4CH" :
+    (RELAY_CHANNEL_COUNT == 3) ? "Relay-Wifi-3CH" :
+    (RELAY_CHANNEL_COUNT == 2) ? "Relay-Wifi-2CH" : "Relay-Wifi";
 constexpr uint8_t DEBOUNCE_TIME = 50;             // 2 ticks * 25 ms = 50 ms
 constexpr uint16_t BUTTON_LONG_PRESS_TIME = 5000; // 200 ticks * 25 ms = 5000 ms
 

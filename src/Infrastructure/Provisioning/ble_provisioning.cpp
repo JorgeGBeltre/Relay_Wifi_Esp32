@@ -45,7 +45,8 @@ static void buildBleStateJson(String& out) {
 
     StaticJsonDocument<640> idDoc;
     idDoc["device_type"]            = "Relay-Wifi";
-    idDoc["model"]                  = "Relay-Wifi";
+    idDoc["model"]                  = RELAY_MODEL_NAME;
+    idDoc["channel_count"]          = RELAY_CHANNEL_COUNT;
     idDoc["device_id"]              = config.device_id;
     idDoc["chip_id"]                = config.device_id;
     idDoc["device_key"]             = config.device_key;
@@ -412,7 +413,8 @@ static void broadcastSmartConfigIdentityAck(const String& deviceId) {
     doc["device_id"]        = deviceId;
     doc["chip_id"]          = deviceId;
     doc["device_type"]      = "Relay-Wifi";
-    doc["model"]            = "Relay-Wifi";
+    doc["model"]            = RELAY_MODEL_NAME;
+    doc["channel_count"]    = RELAY_CHANNEL_COUNT;
     doc["ip"]               = localIp.toString();
     doc["port"]             = 8081;
     doc["config_state"]     = resolveDeviceConfigState(true, false);

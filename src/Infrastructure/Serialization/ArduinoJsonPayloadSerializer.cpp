@@ -25,6 +25,7 @@ std::string ArduinoJsonPayloadSerializer::formatStatus(
     details["chipId"] = id.chipId;
     details["sync_completed"] = syncCompleted;
     details["devices_count"] = relays.size();
+    details["channel_count"] = relays.size();
     details["wifi_status"] = metrics.wifiConnected ? "connected" : "disconnected";
     details["rssi"] = metrics.rssi;
     details["free_heap"] = metrics.freeHeap;
@@ -99,6 +100,8 @@ std::string ArduinoJsonPayloadSerializer::formatTelemetry(
     details["free_heap"] = metrics.freeHeap;
     details["uptime"] = metrics.uptime;
 
+    details["devices_count"] = relays.size();
+    details["channel_count"] = relays.size();
     JsonObject relaysObj = details.createNestedObject("relays");
     for (const auto& r : relays) {
         relaysObj[r.deviceId] = r.currentState ? "on" : "off";

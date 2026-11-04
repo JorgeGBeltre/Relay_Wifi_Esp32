@@ -34,6 +34,18 @@ static infra::EspSystemControl             g_system;
 static infra::GpioIndicator                g_indicator{wifiLed, FAST_BLINK_INTERVAL, SLOW_BLINK_INTERVAL};
 static infra::GpioRelay                    g_relay1{RelayPin1};
 static infra::GpioButton                   g_button1{BUTTON_PIN1, DEBOUNCE_TIME, BUTTON_LONG_PRESS_TIME};
+#if RELAY_CHANNEL_COUNT >= 2
+static infra::GpioRelay                    g_relay2{RelayPin2};
+static infra::GpioButton                   g_button2{BUTTON_PIN2, DEBOUNCE_TIME, BUTTON_LONG_PRESS_TIME};
+#endif
+#if RELAY_CHANNEL_COUNT >= 3
+static infra::GpioRelay                    g_relay3{RelayPin3};
+static infra::GpioButton                   g_button3{BUTTON_PIN3, DEBOUNCE_TIME, BUTTON_LONG_PRESS_TIME};
+#endif
+#if RELAY_CHANNEL_COUNT >= 4
+static infra::GpioRelay                    g_relay4{RelayPin4};
+static infra::GpioButton                   g_button4{BUTTON_PIN4, DEBOUNCE_TIME, BUTTON_LONG_PRESS_TIME};
+#endif
 static infra::WifiLink                     g_wifi{WIFI_CONNECT_TIMEOUT};
 static infra::Mqttv5Transport              g_transport;
 static infra::Mqttv5OtaService             g_ota;
@@ -141,6 +153,18 @@ void setup() {
     g_indicator.setSledOnline(devConfig.sledOnline);
     static app::RelayService relayService{g_logger, &g_configRepo};
     relayService.registerRelay(deviceId1, g_relay1, "device_switch1");
+#if RELAY_CHANNEL_COUNT >= 2
+    std::string deviceId2 = activeDeviceId + "-02";
+    relayService.registerRelay(deviceId2, g_relay2, "device_switch2");
+#endif
+#if RELAY_CHANNEL_COUNT >= 3
+    std::string deviceId3 = activeDeviceId + "-03";
+    relayService.registerRelay(deviceId3, g_relay3, "device_switch3");
+#endif
+#if RELAY_CHANNEL_COUNT >= 4
+    std::string deviceId4 = activeDeviceId + "-04";
+    relayService.registerRelay(deviceId4, g_relay4, "device_switch4");
+#endif
     relayService.initWithStartupConfig(
         devConfig.startupMode,
         devConfig.lastRelayState,
@@ -214,6 +238,15 @@ void setup() {
         provisioningCallback, &timerScheduler, &g_configRepo};
 
     controller.registerButton(g_button1, deviceId1);
+#if RELAY_CHANNEL_COUNT >= 2
+    controller.registerButton(g_button2, deviceId2);
+#endif
+#if RELAY_CHANNEL_COUNT >= 3
+    controller.registerButton(g_button3, deviceId3);
+#endif
+#if RELAY_CHANNEL_COUNT >= 4
+    controller.registerButton(g_button4, deviceId4);
+#endif
     controller.setOnLocalStateChangeCallback([]() {
         if (g_lanServer) {
             g_lanServer->notifyMdnsStateChange();

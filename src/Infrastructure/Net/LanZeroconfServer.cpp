@@ -108,10 +108,12 @@ void LanZeroconfServer::handleUdpDiscovery() {
     const char* cfgState = resolveDeviceConfigState(wifiConn, mqttConn);
 
     StaticJsonDocument<512> doc;
+    const auto allStates = relays_.getAllStates();
     doc["device_id"]              = activeDeviceId_.c_str();
     doc["chip_id"]                = activeDeviceId_.c_str();
     doc["device_type"]            = "Relay-Wifi";
-    doc["model"]                  = "Relay-Wifi";
+    doc["model"]                  = RELAY_MODEL_NAME;
+    doc["channel_count"]          = allStates.empty() ? 1U : allStates.size();
     doc["ip"]                     = WiFi.localIP().toString();
     doc["port"]                   = port_;
     doc["version"]                = FIRMWARE_VERSION;
@@ -247,10 +249,55 @@ void LanZeroconfServer::dispatchZeroconf(const char* uri, const String& rawBody,
     const unsigned long now = millis();
 
     if (std::strcmp(uri, "/zeroconf/switch") == 0 || std::strcmp(uri, "/zeroconf/switches") == 0) {
-        const char* sw = dataObj["switch"];
-        if (!sw && dataObj["switches"].is<JsonArray>()) {
-            sw = dataObj["switches"][0]["switch"];
+        const auto allStates = relays_.getAllStates();
+        if (allStates.empty()) {
+            writeError(500);
+            return;
         }
+
+        if (dataObj["switches"].is<JsonArray>()) {
+            JsonArray arr = dataObj["switches"].as<JsonArray>();
+            if (arr.size() == 0) {
+                writeError(400);
+                return;
+            }
+            bool anyApplied = false;
+            std::string lastSw = "off";
+            for (JsonVariant item : arr) {
+                const char* itemSw = item["switch"];
+                if (!itemSw) continue;
+                const bool turnOn = (std::strcmp(itemSw, "on") == 0);
+                const bool turnOff = (std::strcmp(itemSw, "off") == 0);
+                if (!turnOn && !turnOff) continue;
+
+                int outlet = 0;
+                if (item.containsKey("outlet")) {
+                    outlet = item["outlet"].as<int>();
+                } else if (item.containsKey("channel")) {
+                    int ch = item["channel"].as<int>();
+                    outlet = (ch > 0) ? (ch - 1) : 0;
+                }
+                if (outlet < 0 || static_cast<size_t>(outlet) >= allStates.size()) continue;
+
+                const std::string& targetId = allStates[static_cast<size_t>(outlet)].deviceId;
+                relays_.setDesiredState(targetId, turnOn);
+                relays_.applyDesiredState(targetId, now);
+                telemetry_.publishRelayState(targetId);
+                lastSw = itemSw;
+                anyApplied = true;
+            }
+            if (!anyApplied) {
+                writeError(400);
+                return;
+            }
+            telemetry_.publishStatus();
+            telemetry_.publishEvent("LAN_ZEROCONF_SWITCH", std::string("Cambio multicanal por HTTP LAN: ") + lastSw, lastSw);
+            notifyMdnsStateChange();
+            writeError(0);
+            return;
+        }
+
+        const char* sw = dataObj["switch"];
         if (!sw) {
             writeError(400);
             return;
@@ -261,10 +308,32 @@ void LanZeroconfServer::dispatchZeroconf(const char* uri, const String& rawBody,
             writeError(400);
             return;
         }
-        relays_.setDesiredState(relayDeviceId_, turnOn);
-        relays_.applyDesiredState(relayDeviceId_, now);
+
+        if (dataObj["all"].as<bool>()) {
+            for (const auto& r : allStates) {
+                relays_.setDesiredState(r.deviceId, turnOn);
+                relays_.applyDesiredState(r.deviceId, now);
+            }
+            telemetry_.publishAllRelayStates();
+            telemetry_.publishStatus();
+        } else {
+            int outlet = 0;
+            if (dataObj.containsKey("outlet")) {
+                outlet = dataObj["outlet"].as<int>();
+            } else if (dataObj.containsKey("channel")) {
+                int ch = dataObj["channel"].as<int>();
+                outlet = (ch > 0) ? (ch - 1) : 0;
+            }
+            if (outlet < 0 || static_cast<size_t>(outlet) >= allStates.size()) {
+                outlet = 0;
+            }
+            const std::string& targetId = allStates[static_cast<size_t>(outlet)].deviceId;
+            relays_.setDesiredState(targetId, turnOn);
+            relays_.applyDesiredState(targetId, now);
+            telemetry_.publishRelayState(targetId);
+            telemetry_.publishStatus();
+        }
         telemetry_.publishEvent("LAN_ZEROCONF_SWITCH", std::string("Cambio por HTTP LAN: ") + sw, sw);
-        telemetry_.publishRelayState(relayDeviceId_);
         notifyMdnsStateChange();
         writeError(0);
         return;
@@ -324,13 +393,14 @@ void LanZeroconfServer::dispatchZeroconf(const char* uri, const String& rawBody,
     if (std::strcmp(uri, "/zeroconf/info") == 0) {
         ++sequence_;
         loadConfig();
+        const auto allStates = relays_.getAllStates();
         const auto* st = relays_.getState(relayDeviceId_);
         const bool relayOn = (st && st->currentState);
         const bool wifiConn = (WiFi.status() == WL_CONNECTED);
         const bool mqttConn = isMQTTConnected();
         const char* cfgState = resolveDeviceConfigState(wifiConn, mqttConn);
 
-        StaticJsonDocument<512> respDoc;
+        StaticJsonDocument<768> respDoc;
         respDoc["sequence"] = String(sequence_);
         respDoc["seq"]      = sequence_;
         respDoc["error"]    = 0;
@@ -338,7 +408,15 @@ void LanZeroconfServer::dispatchZeroconf(const char* uri, const String& rawBody,
         d["deviceid"]               = activeDeviceId_.c_str();
         d["chipid"]                 = activeDeviceId_.c_str();
         d["device_type"]            = "Relay-Wifi";
+        d["model"]                  = RELAY_MODEL_NAME;
+        d["channel_count"]          = allStates.empty() ? 1U : allStates.size();
         d["switch"]                 = relayOn ? "on" : "off";
+        JsonArray switchesArr = d.createNestedArray("switches");
+        for (size_t i = 0; i < allStates.size(); ++i) {
+            JsonObject swItem = switchesArr.createNestedObject();
+            swItem["outlet"] = static_cast<int>(i);
+            swItem["switch"] = allStates[i].currentState ? "on" : "off";
+        }
         d["startup"]                = domain::startupModeToString(relays_.getStartupMode());
         d["pulse"]                  = relays_.isPulseEnabled() ? "on" : "off";
         d["pulseWidth"]             = relays_.getPulseWidthMs();

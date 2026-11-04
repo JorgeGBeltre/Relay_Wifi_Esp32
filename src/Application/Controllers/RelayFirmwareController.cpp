@@ -1,5 +1,6 @@
 #include "Application/Controllers/RelayFirmwareController.h"
 #include <cstdlib>
+#include <cstring>
 
 namespace relay::app {
 
@@ -265,9 +266,29 @@ void RelayFirmwareController::processCommand(const std::string& rawCmd) {
             return s;
         };
         std::string lower = toLower(cmd);
+        auto extractChannelFromJson = [&](const std::string& s) -> int {
+            for (const char* key : {"\"channel\":", "\\\"channel\\\":", "\"outlet\":", "\\\"outlet\\\":", "\"relay\":", "\\\"relay\\\":"}) {
+                size_t kpos = s.find(key);
+                if (kpos != std::string::npos) {
+                    size_t vpos = kpos + std::strlen(key);
+                    while (vpos < s.size() && (s[vpos] == ' ' || s[vpos] == '"' || s[vpos] == '\\')) ++vpos;
+                    if (vpos < s.size() && s[vpos] >= '0' && s[vpos] <= '9') {
+                        int parsed = std::atoi(s.c_str() + vpos);
+                        const bool isOutlet = (std::strstr(key, "outlet") != nullptr);
+                        int ch = isOutlet ? (parsed + 1) : (parsed <= 0 ? 1 : parsed);
+                        if (ch >= 1 && ch <= 16) return ch;
+                    }
+                }
+            }
+            return 1;
+        };
+        const bool isAllCmd = (lower.find("\"set_power_all\"") != std::string::npos ||
+                               lower.find("\"all\":true") != std::string::npos);
+        const int targetCh = extractChannelFromJson(lower);
+
         if (lower.find("\"reset\"") != std::string::npos || lower.find("\"reboot\"") != std::string::npos) {
             cmd = "reset";
-        } else if (lower.find("\"toggle_all\"") != std::string::npos || lower.find("\"toggle\"") != std::string::npos) {
+        } else if (lower.find("\"toggle_all\"") != std::string::npos || (isAllCmd && lower.find("\"toggle\"") != std::string::npos)) {
             cmd = "toggle_all";
         } else if (lower.find("\"switch\":\"on\"") != std::string::npos ||
                    lower.find("\\\"switch\\\":\\\"on\\\"") != std::string::npos ||
@@ -278,7 +299,7 @@ void RelayFirmwareController::processCommand(const std::string& rawCmd) {
                    lower.find("\"state\":1") != std::string::npos ||
                    lower.find("\\\"state\\\":1") != std::string::npos ||
                    lower.find("\"payload\":\"on\"") != std::string::npos) {
-            cmd = "switch1:on";
+            cmd = isAllCmd ? "all:on" : ("switch" + std::to_string(targetCh) + ":on");
         } else if (lower.find("\"switch\":\"off\"") != std::string::npos ||
                    lower.find("\\\"switch\\\":\\\"off\\\"") != std::string::npos ||
                    lower.find("\"state\":\"off\"") != std::string::npos ||
@@ -288,7 +309,9 @@ void RelayFirmwareController::processCommand(const std::string& rawCmd) {
                    lower.find("\"state\":0") != std::string::npos ||
                    lower.find("\\\"state\\\":0") != std::string::npos ||
                    lower.find("\"payload\":\"off\"") != std::string::npos) {
-            cmd = "switch1:off";
+            cmd = isAllCmd ? "all:off" : ("switch" + std::to_string(targetCh) + ":off");
+        } else if (lower.find("\"toggle\"") != std::string::npos) {
+            cmd = "switch" + std::to_string(targetCh) + ":toggle";
         }
     }
 

@@ -77,7 +77,8 @@ public:
                 doc["apikey"]                 = hasWifi ? config.device_key.c_str() : "00000000-0000-0000-0000-000000000000";
                 doc["devicekey"]              = config.device_key.c_str();
                 doc["device_type"]            = "Relay-Wifi";
-                doc["model"]                  = "Relay-Wifi";
+                doc["model"]                  = RELAY_MODEL_NAME;
+                doc["channel_count"]          = RELAY_CHANNEL_COUNT;
                 doc["version"]                = FIRMWARE_VERSION;
                 doc["config_state"]           = cfgState;
                 doc["provisioning_mode"]      = true;
