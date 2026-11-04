@@ -86,7 +86,7 @@ private:
     unsigned long                  lastTimeSyncMs_ = 0;
     unsigned long                  lastConnectAttemptMs_ = 0;
     uint32_t                       lastEvaluatedEpochSec_ = 0;
-    static constexpr unsigned long STATUS_INTERVAL_MS = 3600000;
+    static constexpr unsigned long STATUS_INTERVAL_MS = 60000;
     static constexpr unsigned long TIME_SYNC_INTERVAL_MS = 3600000;
     static constexpr unsigned long RECONNECT_BACKOFF_MS = 5000;
 };

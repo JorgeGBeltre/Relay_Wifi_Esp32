@@ -35,7 +35,7 @@ std::string NtpTimeProvider::isoTimestamp() {
     time_t now;
     time(&now);
 
-    if (now < 1000000000 || !getLocalTime(&timeinfo, 20)) {
+    if (now < 1000000000 || gmtime_r(&now, &timeinfo) == nullptr) {
         unsigned long ms = millis();
         char fallback[32];
         snprintf(fallback, sizeof(fallback), "2026-01-01T00:00:%02lu.%03luZ",

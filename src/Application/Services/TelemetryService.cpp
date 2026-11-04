@@ -40,7 +40,7 @@ void TelemetryService::publishRelayState(const std::string& deviceId) {
     if (!relay) return;
 
     std::string stateStr = relay->currentState ? "on" : "off";
-    std::string topic = topics_.relay(relay->topic, "_state");
+    std::string topic = topics_.relay(relay->topic, "/report");
 
     connectivity_.transport().publish(topic, stateStr);
     log_.info("[TELEM] Estado de relé " + deviceId + " publicado en " + topic + " -> " + stateStr);

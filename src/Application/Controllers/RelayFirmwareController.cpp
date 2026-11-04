@@ -299,8 +299,20 @@ void RelayFirmwareController::processCommand(const std::string& rawCmd) {
     } else if (cmd == "status") {
         telemetry_.publishStatus();
     } else if (cmd == "toggle_all") {
-        telemetry_.publishEvent("RELAY_TOGGLE_ALL", "Todos los relays cambiados de estado");
         relays_.toggleAll(now);
+        const auto states = relays_.getAllStates();
+        const std::string newStateStr = (!states.empty() && states.front().currentState) ? "on" : "off";
+        telemetry_.publishEvent("RELAY_TOGGLE_ALL", "Todos los relays cambiados de estado", newStateStr);
+        telemetry_.publishStatus();
+        telemetry_.publishAllRelayStates();
+        if (onStateChangeCb_) onStateChangeCb_();
+    } else if (cmd == "all:on" || cmd == "all:off") {
+        const bool targetOn = (cmd == "all:on");
+        for (const auto& r : relays_.getAllStates()) {
+            relays_.setDesiredState(r.deviceId, targetOn);
+            relays_.applyDesiredState(r.deviceId, now);
+        }
+        telemetry_.publishEvent("DEVICE_COMMAND", targetOn ? "Comando all:on" : "Comando all:off", targetOn ? "on" : "off");
         telemetry_.publishStatus();
         telemetry_.publishAllRelayStates();
         if (onStateChangeCb_) onStateChangeCb_();
@@ -308,31 +320,37 @@ void RelayFirmwareController::processCommand(const std::string& rawCmd) {
         telemetry_.publishEvent("STATE_SYNC", "Sincronización de estados solicitada");
         relays_.setInitialSyncCompleted(false);
         telemetry_.requestCurrentStates();
-    } else if (cmd.rfind("switch1:", 0) == 0) {
-        std::string subcmd = cmd.substr(8);
-        telemetry_.publishEvent("DEVICE_COMMAND", "Comando switch1: " + subcmd);
-        if (subcmd == "on" || subcmd == "1" || subcmd == "true") {
-            for (const auto& r : relays_.getAllStates()) {
-                relays_.setDesiredState(r.deviceId, true);
-                relays_.applyDesiredState(r.deviceId, now);
-                telemetry_.publishRelayState(r.deviceId);
-                break;
+    } else if (cmd.rfind("switch", 0) == 0 && cmd.find(':') != std::string::npos) {
+        const size_t colonPos = cmd.find(':');
+        const std::string chStr = cmd.substr(6, colonPos - 6);
+        const size_t chOneBased = chStr.empty() ? 1U : static_cast<size_t>(std::strtoul(chStr.c_str(), nullptr, 10));
+        const size_t targetIdx = (chOneBased > 0) ? (chOneBased - 1U) : 0U;
+        const std::string subcmd = cmd.substr(colonPos + 1);
+        const auto allRelays = relays_.getAllStates();
+        if (!allRelays.empty() && targetIdx < allRelays.size()) {
+            const std::string targetId = allRelays[targetIdx].deviceId;
+            bool applied = false;
+            if (subcmd == "on" || subcmd == "1" || subcmd == "true") {
+                relays_.setDesiredState(targetId, true);
+                relays_.applyDesiredState(targetId, now);
+                applied = true;
+            } else if (subcmd == "off" || subcmd == "0" || subcmd == "false") {
+                relays_.setDesiredState(targetId, false);
+                relays_.applyDesiredState(targetId, now);
+                applied = true;
+            } else if (subcmd == "toggle") {
+                relays_.toggle(targetId, now);
+                applied = true;
             }
-        } else if (subcmd == "off" || subcmd == "0" || subcmd == "false") {
-            for (const auto& r : relays_.getAllStates()) {
-                relays_.setDesiredState(r.deviceId, false);
-                relays_.applyDesiredState(r.deviceId, now);
-                telemetry_.publishRelayState(r.deviceId);
-                break;
-            }
-        } else if (subcmd == "toggle") {
-            for (const auto& r : relays_.getAllStates()) {
-                relays_.toggle(r.deviceId, now);
-                telemetry_.publishRelayState(r.deviceId);
-                break;
+            if (applied) {
+                const auto* updated = relays_.getState(targetId);
+                const std::string stateStr = (updated && updated->currentState) ? "on" : "off";
+                telemetry_.publishRelayState(targetId);
+                telemetry_.publishStatus();
+                telemetry_.publishEvent("DEVICE_COMMAND", "Comando switch" + std::to_string(targetIdx + 1U) + ": " + subcmd, stateStr);
+                if (onStateChangeCb_) onStateChangeCb_();
             }
         }
-        if (onStateChangeCb_) onStateChangeCb_();
     } else if (cmd.rfind("startup:", 0) == 0) {
         std::string modeStr = cmd.substr(8);
         domain::StartupMode mode = domain::startupModeFromString(modeStr);

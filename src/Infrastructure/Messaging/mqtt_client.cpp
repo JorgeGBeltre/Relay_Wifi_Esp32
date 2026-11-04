@@ -55,6 +55,12 @@ void initMQTT(const char* server, uint16_t port,
         Serial.println("[MQTT5] ¡Conectado al broker exitosamente!");
 
         initOTA(g_clientId, g_firmwareVersion);
+        MQTTProperties reconnectWillProps;
+        reconnectWillProps.setContentType("application/json");
+        reconnectWillProps.setWillDelay(5);
+        mqtt.setWill("status/" + g_clientId,
+                     "{\"status\":\"offline\",\"device_id\":\"" + g_clientId + "\"}",
+                     1, true, &reconnectWillProps);
 
         if (g_onConnectCallback) {
             g_onConnectCallback();
