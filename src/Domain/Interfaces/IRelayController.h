@@ -10,6 +10,7 @@ public:
     virtual void init() = 0;
     virtual void setState(bool on) = 0;
     virtual bool getState() const = 0;
+    virtual bool readHardwareState() const { return getState(); }
     virtual uint8_t getPin() const = 0;
 };
 

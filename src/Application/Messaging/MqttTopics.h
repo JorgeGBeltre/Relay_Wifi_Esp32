@@ -12,6 +12,7 @@ struct MqttTopics {
     std::string status;
     std::string deviceEvents;
     std::string devicePrefix;
+    std::string commandsAck;
     std::string timersCommand;
     std::string wifiCommand;
     std::string switchSet;
@@ -28,6 +29,7 @@ struct MqttTopics {
         t.status        = "status/" + chipId;
         t.deviceEvents  = "event/" + chipId;
         t.devicePrefix  = "devices/" + chipId;
+        t.commandsAck   = t.devicePrefix + "/commands/ack";
         t.timersCommand = t.devicePrefix + "/timers/command";
         t.wifiCommand   = t.devicePrefix + "/wifi/command";
         t.switchSet     = t.devicePrefix + "/" + baseSwitch + "/state";

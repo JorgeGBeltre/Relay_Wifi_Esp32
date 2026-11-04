@@ -1,7 +1,14 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <esp_system.h>
 #include "Infrastructure/Config/config.h"
 #include "Infrastructure/Config/NvsConfigRepository.h"
+
+SET_LOOP_TASK_STACK_SIZE(16384);
+
+RTC_NOINIT_ATTR static uint32_t g_rtcRelayMagic;
+RTC_NOINIT_ATTR static uint8_t  g_rtcRelayMask;
+static constexpr uint32_t RTC_RELAY_MAGIC = 0x524C5931U;
 
 #include "Application/Controllers/RelayFirmwareController.h"
 #include "Application/Messaging/MqttTopics.h"
@@ -270,13 +277,28 @@ void setup() {
     std::string deviceId4 = activeDeviceId + "-04";
     relayService.registerRelay(deviceId4, g_relay4, "device_switch4");
 #endif
+    const esp_reset_reason_t resetReason = esp_reset_reason();
+    const bool isPowerOnReset =
+        (resetReason == ESP_RST_POWERON ||
+         resetReason == ESP_RST_BROWNOUT ||
+         resetReason == ESP_RST_EXT ||
+         resetReason == ESP_RST_UNKNOWN);
+    const uint8_t savedNvsMask = g_configRepo.loadRelayMask(devConfig.lastRelayState);
+    const uint8_t effectiveSavedMask = (!isPowerOnReset && g_rtcRelayMagic == RTC_RELAY_MAGIC)
+        ? g_rtcRelayMask
+        : savedNvsMask;
+
     relayService.initWithStartupConfig(
         devConfig.startupMode,
         devConfig.lastRelayState,
         devConfig.pulseEnabled,
         devConfig.pulseWidthMs,
-        millis()
+        millis(),
+        isPowerOnReset,
+        effectiveSavedMask
     );
+    g_rtcRelayMagic = RTC_RELAY_MAGIC;
+    g_rtcRelayMask = relayService.getRelayMask();
     g_relayService = &relayService;
 
     Serial.println("\n=============================================");
@@ -353,6 +375,10 @@ void setup() {
     controller.registerButton(g_button4, deviceId4);
 #endif
     controller.setOnLocalStateChangeCallback([]() {
+        if (g_relayService) {
+            g_rtcRelayMagic = RTC_RELAY_MAGIC;
+            g_rtcRelayMask = g_relayService->getRelayMask();
+        }
         if (g_lanServer) {
             g_lanServer->notifyMdnsStateChange();
         }
@@ -387,5 +413,9 @@ void loop() {
         g_pendingWifiAdoption = PendingWifiAdoption{};
         executeHotWifiAdoption(req.targetSsid, req.targetPass, req.requestId);
     }
-    delay(5);
+    if (g_relayService) {
+        g_rtcRelayMagic = RTC_RELAY_MAGIC;
+        g_rtcRelayMask = g_relayService->getRelayMask();
+    }
+    delay(1);
 }

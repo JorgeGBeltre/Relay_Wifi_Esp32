@@ -52,6 +52,18 @@ public:
         return ::saveLastRelayStateNvs(state);
     }
 
+    bool saveRelayMask(uint8_t mask) override {
+        return ::saveRelayMaskNvs(mask);
+    }
+
+    uint8_t loadRelayMask(bool fallbackFirstChannel = false) override {
+        return ::loadRelayMaskNvs(fallbackFirstChannel);
+    }
+
+    uint32_t reserveStateVersionBlock(uint32_t blockSize = 64U) override {
+        return ::reserveStateVersionBlockNvs(blockSize);
+    }
+
     bool saveStartupMode(domain::StartupMode mode) override {
         return ::saveStartupModeNvs(static_cast<uint8_t>(mode));
     }

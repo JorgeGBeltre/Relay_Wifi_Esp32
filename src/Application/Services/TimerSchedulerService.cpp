@@ -105,7 +105,7 @@ size_t TimerSchedulerService::applyActionToTarget(uint8_t channel, bool action, 
             return 0;
         }
         relays_.setDesiredState(targetDeviceId_, action);
-        relays_.applyDesiredState(targetDeviceId_, nowMs);
+        relays_.applyDesiredState(targetDeviceId_, nowMs, "AUTOMATION_TIMER");
         return 1;
     }
 
@@ -114,7 +114,7 @@ size_t TimerSchedulerService::applyActionToTarget(uint8_t channel, bool action, 
         for (const auto& r : allStates) {
             if (onlyIfChanged && r.currentState == action) continue;
             relays_.setDesiredState(r.deviceId, action);
-            relays_.applyDesiredState(r.deviceId, nowMs);
+            relays_.applyDesiredState(r.deviceId, nowMs, "AUTOMATION_TIMER");
             ++changed;
         }
         return changed;
@@ -127,11 +127,12 @@ size_t TimerSchedulerService::applyActionToTarget(uint8_t channel, bool action, 
         return 0;
     }
     relays_.setDesiredState(allStates[idx].deviceId, action);
-    relays_.applyDesiredState(allStates[idx].deviceId, nowMs);
+    relays_.applyDesiredState(allStates[idx].deviceId, nowMs, "AUTOMATION_TIMER");
     return 1;
 }
 
-size_t TimerSchedulerService::evaluate(uint32_t currentEpochSec, unsigned long nowMs) {
+size_t TimerSchedulerService::evaluate(uint32_t currentEpochSec, unsigned long nowMs, bool* outTimersMutated) {
+    if (outTimersMutated) *outTimersMutated = false;
     if (currentEpochSec == 0) return 0;
 
     uint8_t weekday = 0;
@@ -189,6 +190,7 @@ size_t TimerSchedulerService::evaluate(uint32_t currentEpochSec, unsigned long n
 
     if (statePersistedNeeded) {
         saveToStorage();
+        if (outTimersMutated) *outTimersMutated = true;
     }
     return triggeredCount;
 }

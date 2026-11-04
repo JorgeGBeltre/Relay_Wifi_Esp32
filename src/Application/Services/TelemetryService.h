@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include "Application/Messaging/MqttTopics.h"
 #include "Application/Serialization/IPayloadSerializer.h"
@@ -12,6 +13,8 @@
 #include "Domain/Interfaces/ITimeProvider.h"
 
 namespace relay::app {
+
+class TimerSchedulerService;
 
 class TelemetryService {
 public:
@@ -28,7 +31,21 @@ public:
           topics_(topics), log_(logger) {}
 
     void publishStatus();
-    void publishEvent(const std::string& name, const std::string& description, const std::string& state = "");
+    void publishEvent(const std::string& name,
+                      const std::string& description,
+                      const std::string& state = "",
+                      const std::string& source = "");
+    void publishTimersEvent(const std::string& name,
+                            const std::string& description,
+                            const TimerSchedulerService& scheduler);
+    void publishCommandAck(const std::string& commandId,
+                           uint64_t sequence,
+                           const std::string& status,
+                           const std::string& source,
+                           uint32_t execUs,
+                           int channel = 1,
+                           bool duplicate = false,
+                           const std::string& errorMsg = "");
     void publishRelayState(const std::string& deviceId);
     void publishAllRelayStates();
     void publishTelemetry();

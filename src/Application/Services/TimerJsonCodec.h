@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include "Application/Services/TimerSchedulerService.h"
 #include "Domain/Entities/ScheduledTimer.h"
 
@@ -13,7 +14,8 @@ public:
     static bool applyTimersFromJsonArray(JsonArrayConst arr,
                                          TimerSchedulerService& scheduler,
                                          uint32_t currentEpochSec = 0) {
-        domain::ScheduledTimer parsed[TimerSchedulerService::MAX_TIMERS]{};
+        std::unique_ptr<domain::ScheduledTimer[]> parsed(
+            new domain::ScheduledTimer[TimerSchedulerService::MAX_TIMERS]());
         size_t count = 0;
         uint8_t nextNumericId = 1;
 
@@ -112,7 +114,7 @@ public:
             parsed[count++] = t;
         }
 
-        return scheduler.replaceAllTimers(parsed, count);
+        return scheduler.replaceAllTimers(parsed.get(), count);
     }
 
     static void serializeTimersToJsonArray(const TimerSchedulerService& scheduler, JsonArray outArr) {

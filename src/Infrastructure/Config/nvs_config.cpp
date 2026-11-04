@@ -150,8 +150,46 @@ bool saveLastRelayStateNvs(bool state) {
     config.last_relay_state = state;
     if (!preferences.begin("relay-config", false)) return false;
     preferences.putBool("last_rly", state);
+    uint8_t mask = preferences.getUChar("rly_mask", 0);
+    if (state) mask |= 0x01U;
+    else mask &= static_cast<uint8_t>(~0x01U);
+    preferences.putUChar("rly_mask", mask);
     preferences.end();
     return true;
+}
+
+bool saveRelayMaskNvs(uint8_t mask) {
+    config.last_relay_state = (mask & 0x01U) != 0;
+    if (!preferences.begin("relay-config", false)) return false;
+    preferences.putBool("last_rly", config.last_relay_state);
+    preferences.putUChar("rly_mask", mask);
+    preferences.end();
+    return true;
+}
+
+uint8_t loadRelayMaskNvs(bool fallbackFirstChannel) {
+    if (!preferences.begin("relay-config", true)) {
+        return fallbackFirstChannel ? 0x01U : 0x00U;
+    }
+    const bool hasMask = preferences.isKey("rly_mask");
+    const uint8_t mask = hasMask
+        ? preferences.getUChar("rly_mask", 0)
+        : (preferences.getBool("last_rly", fallbackFirstChannel) ? 0x01U : 0x00U);
+    preferences.end();
+    return mask;
+}
+
+uint32_t reserveStateVersionBlockNvs(uint32_t blockSize) {
+    const uint32_t step = (blockSize == 0U) ? 64U : blockSize;
+    if (!preferences.begin("relay-config", false)) {
+        return 1U;
+    }
+    const uint32_t currentFloor = preferences.getUInt("st_ver_flr", 0U);
+    const uint32_t nextBase = (currentFloor == 0U) ? 1U : currentFloor;
+    const uint32_t nextFloor = nextBase + step;
+    preferences.putUInt("st_ver_flr", nextFloor);
+    preferences.end();
+    return nextBase;
 }
 
 bool saveStartupModeNvs(uint8_t mode) {

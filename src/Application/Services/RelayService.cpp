@@ -17,46 +17,109 @@ void RelayService::registerRelay(const std::string& deviceId,
 }
 
 void RelayService::init() {
-    initWithStartupConfig(startupMode_, false, pulseEnabled_, pulseWidthMs_, 0);
+    initWithStartupConfig(startupMode_, false, pulseEnabled_, pulseWidthMs_, 0, true, 0xFFU);
 }
 
 void RelayService::initWithStartupConfig(domain::StartupMode startupMode,
                                          bool lastSavedState,
                                          bool pulseEnabled,
                                          uint32_t pulseWidthMs,
-                                         unsigned long nowMs) {
+                                         unsigned long nowMs,
+                                         bool isPowerOnReset,
+                                         uint8_t savedRelayMask) {
     startupMode_ = startupMode;
     pulseEnabled_ = pulseEnabled;
     if (pulseWidthMs >= PULSE_MIN_MS && pulseWidthMs <= PULSE_MAX_MS && (pulseWidthMs % PULSE_STEP_MS) == 0) {
         pulseWidthMs_ = pulseWidthMs;
     }
 
-    bool initialOn = false;
-    if (startupMode_ == domain::StartupMode::On) {
-        initialOn = true;
-    } else if (startupMode_ == domain::StartupMode::Stay) {
-        initialOn = lastSavedState;
+    if (configRepo_) {
+        const uint32_t base = configRepo_->reserveStateVersionBlock(STATE_VER_BLOCK);
+        stateVersion_ = base;
+        reservedStateVersionCeiling_ = base + STATE_VER_BLOCK;
     }
 
+    uint8_t effectiveMask = savedRelayMask;
+    if (effectiveMask == 0xFFU) {
+        effectiveMask = configRepo_
+            ? configRepo_->loadRelayMask(lastSavedState)
+            : (lastSavedState ? 0x01U : 0x00U);
+    }
+
+    lastSource_ = isPowerOnReset ? "POWER_RESTORE" : "SOFTWARE_RESET_RESTORE";
     log_.info(std::string("[RELAY] Inicializando relés (StartupMode=") +
               domain::startupModeToString(startupMode_) +
-              ", Estado=" + (initialOn ? "ENCENDIDO" : "APAGADO") + ")...");
+              ", PowerOnReset=" + (isPowerOnReset ? "true" : "false") +
+              ", StateVer=" + std::to_string(stateVersion_) + ")...");
 
+    size_t idx = 0;
     for (auto& pair : relays_) {
         auto& managed = pair.second;
+        bool initialOn = false;
+        if (!isPowerOnReset) {
+            initialOn = ((effectiveMask >> idx) & 0x01U) != 0;
+        } else if (startupMode_ == domain::StartupMode::On) {
+            initialOn = true;
+        } else if (startupMode_ == domain::StartupMode::Stay) {
+            initialOn = ((effectiveMask >> idx) & 0x01U) != 0;
+        }
+
         if (managed.controller) {
             managed.controller->init();
             managed.controller->setState(initialOn);
-            managed.state.currentState = initialOn;
-            managed.state.desiredState = initialOn;
+            const bool verified = managed.controller->readHardwareState();
+            managed.state.currentState = verified;
+            managed.state.desiredState = verified;
             managed.state.stateChanged = false;
-            if (initialOn && pulseEnabled_) {
+            if (verified && pulseEnabled_) {
                 pulseArmed_ = true;
                 pulseStartMs_ = nowMs;
                 pulseTargetDeviceId_ = pair.first;
             }
         }
+        ++idx;
     }
+    initialSyncCompleted_ = true;
+    if (configRepo_) {
+        configRepo_->saveRelayMask(getRelayMask());
+    }
+}
+
+uint32_t RelayService::bumpStateVersion(const std::string& source) {
+    if (!source.empty()) {
+        lastSource_ = source;
+    }
+    ++stateVersion_;
+    if (configRepo_ && stateVersion_ >= reservedStateVersionCeiling_) {
+        const uint32_t nextBase = configRepo_->reserveStateVersionBlock(STATE_VER_BLOCK);
+        if (nextBase > stateVersion_) {
+            stateVersion_ = nextBase;
+        }
+        reservedStateVersionCeiling_ = stateVersion_ + STATE_VER_BLOCK;
+    }
+    return stateVersion_;
+}
+
+uint8_t RelayService::getRelayMask() const {
+    uint8_t mask = 0;
+    size_t idx = 0;
+    for (const auto& pair : relays_) {
+        if (idx < 8U && pair.second.state.currentState) {
+            mask |= static_cast<uint8_t>(1U << idx);
+        }
+        ++idx;
+    }
+    return mask;
+}
+
+bool RelayService::verifyHardwareState(const std::string& deviceId) {
+    auto it = relays_.find(deviceId);
+    if (it == relays_.end()) return false;
+    auto& managed = it->second;
+    if (managed.controller) {
+        managed.state.currentState = managed.controller->readHardwareState();
+    }
+    return managed.state.currentState;
 }
 
 bool RelayService::setDesiredState(const std::string& deviceId, bool desired) {
@@ -67,12 +130,18 @@ bool RelayService::setDesiredState(const std::string& deviceId, bool desired) {
     return true;
 }
 
-void RelayService::onRelayHardwareTransition(const std::string& deviceId, bool newState, unsigned long nowMs) {
-    // 1. Si StartupMode == Stay, agendar guardado diferido de 150 ms
-    if (startupMode_ == domain::StartupMode::Stay && configRepo_) {
+void RelayService::onRelayHardwareTransition(const std::string& deviceId,
+                                             bool newState,
+                                             unsigned long nowMs,
+                                             const std::string& source) {
+    bumpStateVersion(source);
+
+    // 1. Persistir máscara real en NVS de forma diferida (150 ms) para preservar estado ante reinicios por software y Stay
+    if (configRepo_) {
         deferredStateToSave_ = newState;
+        deferredMaskToSave_ = getRelayMask();
         if (nowMs == 0) {
-            configRepo_->saveLastRelayState(newState);
+            configRepo_->saveRelayMask(deferredMaskToSave_);
             pendingDeferredSave_ = false;
         } else {
             lastToggleMs_ = nowMs;
@@ -90,44 +159,61 @@ void RelayService::onRelayHardwareTransition(const std::string& deviceId, bool n
     }
 }
 
-bool RelayService::applyDesiredState(const std::string& deviceId, unsigned long nowMs) {
+bool RelayService::applyDesiredState(const std::string& deviceId,
+                                     unsigned long nowMs,
+                                     const std::string& source) {
     auto it = relays_.find(deviceId);
     if (it == relays_.end()) return false;
 
     auto& managed = it->second;
+    if (managed.controller) {
+        managed.state.currentState = managed.controller->readHardwareState();
+    }
     if (managed.state.currentState != managed.state.desiredState) {
-        managed.state.currentState = managed.state.desiredState;
         if (managed.controller) {
-            managed.controller->setState(managed.state.currentState);
+            managed.controller->setState(managed.state.desiredState);
+            managed.state.currentState = managed.controller->readHardwareState();
+        } else {
+            managed.state.currentState = managed.state.desiredState;
         }
         managed.state.stateChanged = true;
-        onRelayHardwareTransition(deviceId, managed.state.currentState, nowMs);
-        log_.info("[RELAY] " + deviceId + " -> " + (managed.state.currentState ? "ENCENDIDO" : "APAGADO"));
+        onRelayHardwareTransition(deviceId, managed.state.currentState, nowMs, source);
+        log_.info("[RELAY] " + deviceId + " -> " +
+                  (managed.state.currentState ? "ENCENDIDO" : "APAGADO") +
+                  " (src=" + lastSource_ + ", ver=" + std::to_string(stateVersion_) + ")");
         return true;
     }
     return false;
 }
 
-void RelayService::applyAllDesiredStates(unsigned long nowMs) {
+void RelayService::applyAllDesiredStates(unsigned long nowMs, const std::string& source) {
     for (auto& pair : relays_) {
-        applyDesiredState(pair.first, nowMs);
+        applyDesiredState(pair.first, nowMs, source);
     }
 }
 
-bool RelayService::toggle(const std::string& deviceId, unsigned long nowMs) {
+bool RelayService::toggle(const std::string& deviceId,
+                          unsigned long nowMs,
+                          const std::string& source) {
     auto it = relays_.find(deviceId);
     if (it == relays_.end()) return false;
 
+    if (it->second.controller) {
+        it->second.state.currentState = it->second.controller->readHardwareState();
+    }
     bool nextState = !it->second.state.currentState;
     it->second.state.desiredState = nextState;
-    return applyDesiredState(deviceId, nowMs);
+    return applyDesiredState(deviceId, nowMs, source);
 }
 
-void RelayService::toggleAll(unsigned long nowMs) {
+void RelayService::toggleAll(unsigned long nowMs, const std::string& source) {
     for (auto& pair : relays_) {
+        if (pair.second.controller) {
+            pair.second.state.currentState = pair.second.controller->readHardwareState();
+        }
         bool nextState = !pair.second.state.currentState;
         pair.second.state.desiredState = nextState;
-        applyDesiredState(pair.first, nowMs);
+        applyDesiredState(pair.first, nowMs, source);
     }
 }
 
@@ -137,7 +223,7 @@ bool RelayService::flushDeferredSave(unsigned long nowMs) {
     }
     if ((nowMs - lastToggleMs_) >= DEFERRED_SAVE_DELAY_MS) {
         pendingDeferredSave_ = false;
-        configRepo_->saveLastRelayState(deferredStateToSave_);
+        configRepo_->saveRelayMask(deferredMaskToSave_);
         return true;
     }
     return false;
@@ -175,7 +261,7 @@ bool RelayService::updatePulseTimer(unsigned long nowMs, std::string& outExpired
         pulseArmed_ = false;
         outExpiredDeviceId = pulseTargetDeviceId_;
         setDesiredState(pulseTargetDeviceId_, false);
-        return applyDesiredState(pulseTargetDeviceId_, nowMs);
+        return applyDesiredState(pulseTargetDeviceId_, nowMs, "PULSE_AUTO_OFF");
     }
     return false;
 }
@@ -185,10 +271,7 @@ void RelayService::setStartupMode(domain::StartupMode mode) {
     if (configRepo_) {
         configRepo_->saveStartupMode(mode);
         if (mode == domain::StartupMode::Stay) {
-            for (const auto& pair : relays_) {
-                configRepo_->saveLastRelayState(pair.second.state.currentState);
-                break;
-            }
+            configRepo_->saveRelayMask(getRelayMask());
         }
     }
 }

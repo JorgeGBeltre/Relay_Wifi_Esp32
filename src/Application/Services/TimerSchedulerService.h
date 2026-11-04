@@ -26,7 +26,7 @@ public:
     const domain::ScheduledTimer* getTimers() const { return timers_; }
 
     // Evalúa los temporizadores una vez por segundo contra el epoch UTC actual
-    size_t evaluate(uint32_t currentEpochSec, unsigned long nowMs = 0);
+    size_t evaluate(uint32_t currentEpochSec, unsigned long nowMs = 0, bool* outTimersMutated = nullptr);
 
 private:
     void saveToStorage();

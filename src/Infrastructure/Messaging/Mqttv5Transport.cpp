@@ -15,8 +15,8 @@ bool Mqttv5Transport::isConnected() const {
     return isMQTTConnected();
 }
 
-bool Mqttv5Transport::publish(const std::string& topic, const std::string& payload) {
-    return publishMQTT(String(topic.c_str()), String(payload.c_str()), 1, false);
+bool Mqttv5Transport::publish(const std::string& topic, const std::string& payload, bool retain) {
+    return publishMQTT(String(topic.c_str()), String(payload.c_str()), 1, retain);
 }
 
 void Mqttv5Transport::subscribe(const std::string& topic) {

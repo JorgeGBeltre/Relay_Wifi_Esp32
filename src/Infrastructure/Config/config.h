@@ -59,6 +59,6 @@ constexpr int FAST_BLINK_INTERVAL = 100;
 constexpr int SLOW_BLINK_INTERVAL = 400;
 
 constexpr uint16_t LAN_HTTP_PORT = 8081;
-constexpr const char* FIRMWARE_VERSION = "v0.0.8";
+constexpr const char* FIRMWARE_VERSION = "v0.0.9";
 
 #endif

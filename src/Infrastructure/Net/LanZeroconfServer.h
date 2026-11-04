@@ -58,6 +58,8 @@ private:
     bool udpRunning_ = false;
     bool otaUnlocked_ = false;
     uint32_t sequence_ = 1;
+    char responseBuf_[2048]{};
+    char decryptedJson_[1536]{};
 };
 
 } // namespace relay::infra

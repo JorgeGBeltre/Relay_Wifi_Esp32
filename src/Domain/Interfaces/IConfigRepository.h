@@ -22,6 +22,9 @@ public:
 
     // Persistencia granular para evitar reescribir toda la NVS en cada conmutación del relé
     virtual bool saveLastRelayState(bool state) { (void)state; return false; }
+    virtual bool saveRelayMask(uint8_t mask) { (void)mask; return false; }
+    virtual uint8_t loadRelayMask(bool fallbackFirstChannel = false) { return fallbackFirstChannel ? 0x01U : 0x00U; }
+    virtual uint32_t reserveStateVersionBlock(uint32_t blockSize = 64U) { (void)blockSize; return 1U; }
     virtual bool saveStartupMode(StartupMode mode) { (void)mode; return false; }
     virtual bool savePulseConfig(bool enabled, uint32_t widthMs) { (void)enabled; (void)widthMs; return false; }
     virtual bool saveSledOnline(bool enabled) { (void)enabled; return false; }

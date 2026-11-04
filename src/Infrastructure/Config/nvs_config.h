@@ -39,6 +39,9 @@ void resetConfig();
 bool saveLastWifiErrorNvs(const char* err);
 
 bool saveLastRelayStateNvs(bool state);
+bool saveRelayMaskNvs(uint8_t mask);
+uint8_t loadRelayMaskNvs(bool fallbackFirstChannel = false);
+uint32_t reserveStateVersionBlockNvs(uint32_t blockSize = 64U);
 bool saveStartupModeNvs(uint8_t mode);
 bool savePulseConfigNvs(bool enabled, uint32_t widthMs);
 bool saveSledOnlineNvs(bool enabled);

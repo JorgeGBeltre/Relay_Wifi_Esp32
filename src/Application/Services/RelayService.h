@@ -40,14 +40,34 @@ public:
                                bool lastSavedState,
                                bool pulseEnabled,
                                uint32_t pulseWidthMs,
-                               unsigned long nowMs = 0);
+                               unsigned long nowMs = 0,
+                               bool isPowerOnReset = true,
+                               uint8_t savedRelayMask = 0xFFU);
 
     bool setDesiredState(const std::string& deviceId, bool desired);
-    bool applyDesiredState(const std::string& deviceId, unsigned long nowMs = 0);
-    void applyAllDesiredStates(unsigned long nowMs = 0);
+    bool applyDesiredState(const std::string& deviceId,
+                           unsigned long nowMs = 0,
+                           const std::string& source = "REMOTE_COMMAND");
+    void applyAllDesiredStates(unsigned long nowMs = 0,
+                               const std::string& source = "REMOTE_COMMAND");
 
-    bool toggle(const std::string& deviceId, unsigned long nowMs = 0);
-    void toggleAll(unsigned long nowMs = 0);
+    bool toggle(const std::string& deviceId,
+                unsigned long nowMs = 0,
+                const std::string& source = "PHYSICAL_BUTTON");
+    void toggleAll(unsigned long nowMs = 0,
+                   const std::string& source = "REMOTE_COMMAND");
+
+    uint32_t getStateVersion() const { return stateVersion_; }
+    uint32_t bumpStateVersion(const std::string& source);
+    uint64_t getLastCommandSequence() const { return lastCommandSequence_; }
+    void setLastCommandSequence(uint64_t seq) {
+        if (seq > lastCommandSequence_) {
+            lastCommandSequence_ = seq;
+        }
+    }
+    const std::string& getLastSource() const { return lastSource_; }
+    uint8_t getRelayMask() const;
+    bool verifyHardwareState(const std::string& deviceId);
 
     // Guardado diferido en NVS (150 ms tras última conmutación cuando StartupMode::Stay)
     bool flushDeferredSave(unsigned long nowMs);
@@ -73,17 +93,27 @@ public:
     void setInitialSyncCompleted(bool synced) { initialSyncCompleted_ = synced; }
 
 private:
-    void onRelayHardwareTransition(const std::string& deviceId, bool newState, unsigned long nowMs);
+    void onRelayHardwareTransition(const std::string& deviceId,
+                                   bool newState,
+                                   unsigned long nowMs,
+                                   const std::string& source);
 
     domain::ILogger& log_;
     domain::IConfigRepository* configRepo_ = nullptr;
     std::map<std::string, ManagedRelay> relays_;
-    bool initialSyncCompleted_ = false;
+    bool initialSyncCompleted_ = true;
 
     domain::StartupMode startupMode_ = domain::StartupMode::Off;
     bool pendingDeferredSave_ = false;
     bool deferredStateToSave_ = false;
+    uint8_t deferredMaskToSave_ = 0;
     unsigned long lastToggleMs_ = 0;
+
+    static constexpr uint32_t STATE_VER_BLOCK = 64U;
+    uint32_t stateVersion_ = 1U;
+    uint32_t reservedStateVersionCeiling_ = 0U;
+    uint64_t lastCommandSequence_ = 0U;
+    std::string lastSource_ = "BOOT";
 
     bool pulseEnabled_ = false;
     uint32_t pulseWidthMs_ = 500;

@@ -10,7 +10,9 @@ std::string ArduinoJsonPayloadSerializer::formatStatus(
     const domain::SystemMetrics& metrics,
     const std::vector<domain::RelayState>& relays,
     const std::string& timestamp,
-    bool syncCompleted) {
+    bool syncCompleted,
+    uint32_t stateVersion,
+    const std::string& lastSource) {
 
     DynamicJsonDocument doc(2560);
 
@@ -26,6 +28,10 @@ std::string ArduinoJsonPayloadSerializer::formatStatus(
     JsonObject details = doc.createNestedObject("Details");
     details["chipId"] = id.chipId;
     details["sync_completed"] = syncCompleted;
+    details["state_version"] = stateVersion;
+    if (!lastSource.empty()) {
+        details["source"] = lastSource;
+    }
     details["devices_count"] = relays.size();
     details["channel_count"] = relays.size();
     details["wifi_status"] = metrics.wifiConnected ? "connected" : "disconnected";
@@ -49,11 +55,17 @@ std::string ArduinoJsonPayloadSerializer::formatStatus(
     details["sledOnline"] = config.sled_online ? "on" : "off";
 
     JsonObject devicesObj = details.createNestedObject("devices");
-    for (const auto& r : relays) {
+    JsonArray switchesArr = details.createNestedArray("switches");
+    for (size_t i = 0; i < relays.size(); ++i) {
+        const auto& r = relays[i];
         JsonObject rObj = devicesObj.createNestedObject(r.deviceId);
         rObj["state"] = r.currentState ? "on" : "off";
         rObj["desired_state"] = r.desiredState ? "on" : "off";
         rObj["pin"] = r.pin;
+
+        JsonObject swObj = switchesArr.createNestedObject();
+        swObj["outlet"] = static_cast<int>(i);
+        swObj["switch"] = r.currentState ? "on" : "off";
     }
 
     String output;
@@ -99,7 +111,8 @@ std::string ArduinoJsonPayloadSerializer::formatTelemetry(
     const domain::DeviceIdentity& id,
     const domain::SystemMetrics& metrics,
     const std::vector<domain::RelayState>& relays,
-    const std::string& timestamp) {
+    const std::string& timestamp,
+    uint32_t stateVersion) {
 
     DynamicJsonDocument doc(1792);
 
@@ -113,6 +126,7 @@ std::string ArduinoJsonPayloadSerializer::formatTelemetry(
     doc["Timestamp"] = timestamp;
 
     JsonObject details = doc.createNestedObject("Details");
+    details["state_version"] = stateVersion;
     details["rssi"] = metrics.rssi;
     details["free_heap"] = metrics.freeHeap;
     details["uptime"] = metrics.uptime;

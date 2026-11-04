@@ -12,6 +12,7 @@ public:
     void init() override;
     void setState(bool on) override;
     bool getState() const override { return state_; }
+    bool readHardwareState() const override;
     uint8_t getPin() const override { return pin_; }
 
 private:

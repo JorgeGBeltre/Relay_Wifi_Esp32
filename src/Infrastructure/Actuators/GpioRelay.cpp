@@ -4,14 +4,18 @@
 namespace relay::infra {
 
 void GpioRelay::init() {
-    pinMode(pin_, OUTPUT);
+    pinMode(pin_, INPUT | OUTPUT);
     digitalWrite(pin_, LOW);
-    state_ = false;
+    state_ = (digitalRead(pin_) == HIGH);
 }
 
 void GpioRelay::setState(bool on) {
-    state_ = on;
     digitalWrite(pin_, on ? HIGH : LOW);
+    state_ = (digitalRead(pin_) == HIGH);
+}
+
+bool GpioRelay::readHardwareState() const {
+    return digitalRead(pin_) == HIGH;
 }
 
 }

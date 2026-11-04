@@ -10,7 +10,9 @@ public:
                              const domain::SystemMetrics& metrics,
                              const std::vector<domain::RelayState>& relays,
                              const std::string& timestamp,
-                             bool syncCompleted) override;
+                             bool syncCompleted,
+                             uint32_t stateVersion = 0,
+                             const std::string& lastSource = "") override;
 
     std::string formatEvent(const domain::DeviceIdentity& id,
                             const domain::DeviceEvent& event,
@@ -20,7 +22,8 @@ public:
     std::string formatTelemetry(const domain::DeviceIdentity& id,
                                 const domain::SystemMetrics& metrics,
                                 const std::vector<domain::RelayState>& relays,
-                                const std::string& timestamp) override;
+                                const std::string& timestamp,
+                                uint32_t stateVersion = 0) override;
 };
 
 }

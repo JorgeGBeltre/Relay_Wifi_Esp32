@@ -9,7 +9,7 @@ public:
     bool connect() override;
     void disconnect() override;
     bool isConnected() const override;
-    bool publish(const std::string& topic, const std::string& payload) override;
+    bool publish(const std::string& topic, const std::string& payload, bool retain = false) override;
     void subscribe(const std::string& topic) override;
     void onMessage(MessageHandler handler) override;
     void onConnect(std::function<void()> cb) override;

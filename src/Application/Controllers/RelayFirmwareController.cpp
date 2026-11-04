@@ -1,8 +1,22 @@
 #include "Application/Controllers/RelayFirmwareController.h"
 #include "Application/Services/TimerJsonCodec.h"
 #include <ArduinoJson.h>
+#ifdef ARDUINO
+#include <Arduino.h>
+#endif
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+
+namespace {
+inline uint32_t readMicrosSafe() {
+#ifdef ARDUINO
+    return static_cast<uint32_t>(micros());
+#else
+    return 0U;
+#endif
+}
+} // namespace
 
 namespace relay::app {
 
@@ -88,12 +102,11 @@ void RelayFirmwareController::onMqttConnected() {
     for (const auto& r : relays_.getAllStates()) {
         connectivity_.transport().subscribe(topics_.relay(r.topic, "/state"));
         connectivity_.transport().subscribe(topics_.relay(r.topic, "/command"));
-        connectivity_.transport().subscribe(topics_.relay(r.topic, "_state"));
     }
 
-    telemetry_.publishEvent("MQTT_CONNECTED", "Conexión MQTT establecida");
-    telemetry_.requestCurrentStates();
+    relays_.setInitialSyncCompleted(true);
     telemetry_.publishStatus();
+    telemetry_.publishEvent("MQTT_CONNECTED", "Conexión MQTT establecida", "", relays_.getLastSource());
     lastStatusPublishMs_ = clock_.nowMs();
 }
 
@@ -113,8 +126,9 @@ void RelayFirmwareController::tick() {
     std::string expiredPulseDeviceId;
     if (relays_.updatePulseTimer(now, expiredPulseDeviceId)) {
         log_.info("[PULSE] Modo pulso expiró -> apagando automáticamente " + expiredPulseDeviceId);
-        telemetry_.publishEvent("PULSE_AUTO_OFF", "Apagado automático por modo pulso (inching)", "off");
         telemetry_.publishRelayState(expiredPulseDeviceId);
+        telemetry_.publishStatus();
+        telemetry_.publishEvent("PULSE_AUTO_OFF", "Apagado automático por modo pulso (inching)", "off", "PULSE_AUTO_OFF");
         if (onStateChangeCb_) onStateChangeCb_();
     }
 
@@ -129,9 +143,22 @@ void RelayFirmwareController::tick() {
         const uint32_t epochSec = timeProvider_.epochSeconds();
         if (epochSec > 1000000000U && epochSec != lastEvaluatedEpochSec_) {
             lastEvaluatedEpochSec_ = epochSec;
-            if (timerScheduler_->evaluate(epochSec, now) > 0) {
-                telemetry_.publishEvent("TIMER_TRIGGER", "Conmutación ejecutada por temporizador programado");
+            bool timersMutated = false;
+            const size_t triggered = timerScheduler_->evaluate(epochSec, now, &timersMutated);
+            if (triggered > 0) {
                 telemetry_.publishAllRelayStates();
+                telemetry_.publishStatus();
+                if (timersMutated) {
+                    telemetry_.publishTimersEvent("TIMER_TRIGGER", "Conmutación ejecutada por temporizador programado", *timerScheduler_);
+                } else {
+                    telemetry_.publishEvent("TIMER_TRIGGER", "Conmutación ejecutada por temporizador programado", "", "AUTOMATION_TIMER");
+                }
+                if (onStateChangeCb_) onStateChangeCb_();
+            } else if (timersMutated) {
+                telemetry_.publishTimersEvent(
+                    "TIMERS_UPDATED",
+                    "Temporizadores vencidos deshabilitados sin accionar relé",
+                    *timerScheduler_);
                 if (onStateChangeCb_) onStateChangeCb_();
             }
         }
@@ -184,14 +211,15 @@ void RelayFirmwareController::handleButtonEvents() {
 
         if (ev == domain::ButtonEvent::ShortPress) {
             log_.info("[BUTTON] Pulsación corta detectada para " + btn.targetDeviceId);
-            relays_.toggle(btn.targetDeviceId, now);
+            relays_.toggle(btn.targetDeviceId, now, "PHYSICAL_BUTTON");
 
             const auto* state = relays_.getState(btn.targetDeviceId);
             std::string stateStr = (state && state->currentState) ? "on" : "off";
             std::string desc = "Cambio por botón físico - " + btn.targetDeviceId + ": " + (state && state->currentState ? "ENCENDIDO" : "APAGADO");
 
-            telemetry_.publishEvent("BUTTON_PRESS", desc, stateStr);
             telemetry_.publishRelayState(btn.targetDeviceId);
+            telemetry_.publishStatus();
+            telemetry_.publishEvent("BUTTON_PRESS", desc, stateStr, "PHYSICAL_BUTTON");
             if (onStateChangeCb_) onStateChangeCb_();
         } else if (ev == domain::ButtonEvent::LongPress) {
             log_.info("[BUTTON] Pulsación larga (5s) detectada -> Activando Quick Pairing (BLE + SmartConfig / SoftAP VESIS)");
@@ -238,10 +266,8 @@ void RelayFirmwareController::handleIncomingMessage(const std::string& topic, co
     for (const auto& r : relays_.getAllStates()) {
         std::string setTopic = topics_.relay(r.topic, "/state");
         std::string cmdTopic = topics_.relay(r.topic, "/command");
-        std::string stateTopic = topics_.relay(r.topic, "_state");
         std::string legacySetTopic = r.topic + "/state";
         std::string legacyCmdTopic = r.topic + "/command";
-        std::string legacyStateTopic = r.topic + "_state";
 
         if (topic == setTopic || topic == cmdTopic || topic == legacySetTopic || topic == legacyCmdTopic) {
             bool turnOn = (payload == "on" || payload == "1" || payload == "true");
@@ -250,135 +276,278 @@ void RelayFirmwareController::handleIncomingMessage(const std::string& topic, co
 
             if (turnOn) {
                 relays_.setDesiredState(r.deviceId, true);
-                relays_.applyDesiredState(r.deviceId, now);
+                relays_.applyDesiredState(r.deviceId, now, "REMOTE_COMMAND");
             } else if (turnOff) {
                 relays_.setDesiredState(r.deviceId, false);
-                relays_.applyDesiredState(r.deviceId, now);
+                relays_.applyDesiredState(r.deviceId, now, "REMOTE_COMMAND");
             } else if (doToggle) {
-                relays_.toggle(r.deviceId, now);
+                relays_.toggle(r.deviceId, now, "REMOTE_COMMAND");
+            } else {
+                return;
             }
 
             std::string stateStr = relays_.getState(r.deviceId)->currentState ? "on" : "off";
-            telemetry_.publishEvent("DEVICE_SET_COMMAND", "Comando recibido: " + payload, stateStr);
             telemetry_.publishRelayState(r.deviceId);
-            if (onStateChangeCb_) onStateChangeCb_();
-            return;
-        } else if (topic == stateTopic || topic == legacyStateTopic) {
-            bool serverState = (payload == "on" || payload == "1" || payload == "true");
-            relays_.setDesiredState(r.deviceId, serverState);
-            relays_.applyDesiredState(r.deviceId, now);
-
-            if (!relays_.isInitialSyncCompleted()) {
-                relays_.setInitialSyncCompleted(true);
-                telemetry_.publishEvent("INITIAL_STATE", "Estado inicial desde servidor", serverState ? "on" : "off");
-            } else {
-                telemetry_.publishEvent("STATE_UPDATE", "Actualización de estado desde servidor", serverState ? "on" : "off");
-            }
+            telemetry_.publishStatus();
+            telemetry_.publishEvent("DEVICE_SET_COMMAND", "Comando recibido: " + payload, stateStr, "REMOTE_COMMAND");
             if (onStateChangeCb_) onStateChangeCb_();
             return;
         }
     }
 }
 
+bool RelayFirmwareController::findProcessedCommand(const std::string& commandId,
+                                                   ProcessedCommandEntry& outEntry) const {
+    if (commandId.empty()) return false;
+    for (size_t i = 0; i < CMD_DEDUP_CAPACITY; ++i) {
+        if (recentCommands_[i].commandId[0] != '\0' &&
+            commandId == recentCommands_[i].commandId) {
+            outEntry = recentCommands_[i];
+            return true;
+        }
+    }
+    return false;
+}
+
+void RelayFirmwareController::recordProcessedCommand(const std::string& commandId,
+                                                     uint64_t sequence,
+                                                     int channel,
+                                                     bool reportedState) {
+    if (commandId.empty()) return;
+    ProcessedCommandEntry& slot = recentCommands_[recentCommandHead_];
+    std::snprintf(slot.commandId, sizeof(slot.commandId), "%s", commandId.c_str());
+    slot.sequence = sequence;
+    slot.stateVersion = relays_.getStateVersion();
+    slot.channel = channel;
+    slot.reportedState = reportedState;
+    recentCommandHead_ = (recentCommandHead_ + 1U) % CMD_DEDUP_CAPACITY;
+}
+
 void RelayFirmwareController::processCommand(const std::string& rawCmd) {
     const unsigned long now = clock_.nowMs();
+    const uint32_t startUs = readMicrosSafe();
     std::string cmd = rawCmd;
+    std::string commandId;
+    uint64_t sequence = 0;
+    int parsedChannel = 1;
 
-    // Compatibilidad defensiva con sobres JSON del servidor (p.ej. {"command":"...","payload":...})
     if (!cmd.empty() && cmd.front() == '{') {
-        auto toLower = [](std::string s) {
-            for (char& ch : s) {
-                if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
+        DynamicJsonDocument doc(1536);
+        if (deserializeJson(doc, cmd) == DeserializationError::Ok) {
+            const char* rawCmdId = doc["commandId"] | (doc["command_id"] | "");
+            if (rawCmdId && rawCmdId[0] != '\0') {
+                commandId = rawCmdId;
             }
-            return s;
-        };
-        std::string lower = toLower(cmd);
-        auto extractChannelFromJson = [&](const std::string& s) -> int {
-            for (const char* key : {"\"channel\":", "\\\"channel\\\":", "\"outlet\":", "\\\"outlet\\\":", "\"relay\":", "\\\"relay\\\":"}) {
-                size_t kpos = s.find(key);
-                if (kpos != std::string::npos) {
-                    size_t vpos = kpos + std::strlen(key);
-                    while (vpos < s.size() && (s[vpos] == ' ' || s[vpos] == '"' || s[vpos] == '\\')) ++vpos;
-                    if (vpos < s.size() && s[vpos] >= '0' && s[vpos] <= '9') {
-                        int parsed = std::atoi(s.c_str() + vpos);
-                        const bool isOutlet = (std::strstr(key, "outlet") != nullptr);
-                        int ch = isOutlet ? (parsed + 1) : (parsed <= 0 ? 1 : parsed);
-                        if (ch >= 1 && ch <= 16) return ch;
-                    }
+            if (doc.containsKey("sequence")) {
+                sequence = doc["sequence"].as<uint64_t>();
+            }
+
+            const char* actionStr = doc["action"] | (doc["command"] | "");
+            if (std::strcmp(actionStr, "set_timers") == 0 || doc["timers"].is<JsonArray>()) {
+                handleTimersPayload(rawCmd);
+                return;
+            }
+            if (std::strcmp(actionStr, "set_wifi") == 0) {
+                handleWifiPayload(rawCmd);
+                return;
+            }
+
+            JsonVariantConst payloadVar = doc["payload"];
+            JsonObjectConst payloadObj;
+            DynamicJsonDocument nestedPayloadDoc(512);
+            if (payloadVar.is<JsonObjectConst>()) {
+                payloadObj = payloadVar.as<JsonObjectConst>();
+            } else if (payloadVar.is<const char*>()) {
+                const char* pStr = payloadVar.as<const char*>();
+                if (pStr && pStr[0] == '{' && deserializeJson(nestedPayloadDoc, pStr) == DeserializationError::Ok) {
+                    payloadObj = nestedPayloadDoc.as<JsonObjectConst>();
                 }
             }
-            return 1;
-        };
-        const bool isAllCmd = (lower.find("\"set_power_all\"") != std::string::npos ||
-                               lower.find("\"all\":true") != std::string::npos);
-        const int targetCh = extractChannelFromJson(lower);
 
-        if (lower.find("\"set_timers\"") != std::string::npos || lower.find("\"timers\":[") != std::string::npos) {
-            handleTimersPayload(rawCmd);
-            return;
-        }
-        if (lower.find("\"set_wifi\"") != std::string::npos) {
-            handleWifiPayload(rawCmd);
-            return;
-        }
+            if (doc.containsKey("channel")) {
+                int ch = doc["channel"].as<int>();
+                if (ch >= 1 && ch <= 16) parsedChannel = ch;
+            } else if (!payloadObj.isNull() && payloadObj.containsKey("channel")) {
+                int ch = payloadObj["channel"].as<int>();
+                if (ch >= 1 && ch <= 16) parsedChannel = ch;
+            } else if (doc.containsKey("outlet")) {
+                int outlet = doc["outlet"].as<int>();
+                if (outlet >= 0 && outlet < 16) parsedChannel = outlet + 1;
+            } else if (!payloadObj.isNull() && payloadObj.containsKey("outlet")) {
+                int outlet = payloadObj["outlet"].as<int>();
+                if (outlet >= 0 && outlet < 16) parsedChannel = outlet + 1;
+            }
 
-        if (lower.find("\"reset\"") != std::string::npos || lower.find("\"reboot\"") != std::string::npos) {
-            cmd = "reset";
-        } else if (lower.find("\"toggle_all\"") != std::string::npos || (isAllCmd && lower.find("\"toggle\"") != std::string::npos)) {
-            cmd = "toggle_all";
-        } else if (lower.find("\"switch\":\"on\"") != std::string::npos ||
-                   lower.find("\\\"switch\\\":\\\"on\\\"") != std::string::npos ||
-                   lower.find("\"state\":\"on\"") != std::string::npos ||
-                   lower.find("\\\"state\\\":\\\"on\\\"") != std::string::npos ||
-                   lower.find("\"state\":true") != std::string::npos ||
-                   lower.find("\\\"state\\\":true") != std::string::npos ||
-                   lower.find("\"state\":1") != std::string::npos ||
-                   lower.find("\\\"state\\\":1") != std::string::npos ||
-                   lower.find("\"payload\":\"on\"") != std::string::npos) {
-            cmd = isAllCmd ? "all:on" : ("switch" + std::to_string(targetCh) + ":on");
-        } else if (lower.find("\"switch\":\"off\"") != std::string::npos ||
-                   lower.find("\\\"switch\\\":\\\"off\\\"") != std::string::npos ||
-                   lower.find("\"state\":\"off\"") != std::string::npos ||
-                   lower.find("\\\"state\\\":\\\"off\\\"") != std::string::npos ||
-                   lower.find("\"state\":false") != std::string::npos ||
-                   lower.find("\\\"state\\\":false") != std::string::npos ||
-                   lower.find("\"state\":0") != std::string::npos ||
-                   lower.find("\\\"state\\\":0") != std::string::npos ||
-                   lower.find("\"payload\":\"off\"") != std::string::npos) {
-            cmd = isAllCmd ? "all:off" : ("switch" + std::to_string(targetCh) + ":off");
-        } else if (lower.find("\"toggle\"") != std::string::npos) {
-            cmd = "switch" + std::to_string(targetCh) + ":toggle";
+            // 1. Idempotencia estricta por commandId
+            ProcessedCommandEntry prev{};
+            if (!commandId.empty() && findProcessedCommand(commandId, prev)) {
+                log_.info("[CTRL] Comando duplicado ignorado por idempotencia: " + commandId);
+                telemetry_.publishCommandAck(commandId, prev.sequence, "APPLIED", "REMOTE_COMMAND", 0U, prev.channel, true);
+                return;
+            }
+
+            // 2. Ordenamiento monótono por sequence: jamás permitir que un comando viejo pise uno más nuevo
+            const uint64_t effectiveLastSeq = relays_.getLastCommandSequence() > lastCommandSequence_
+                ? relays_.getLastCommandSequence()
+                : lastCommandSequence_;
+            if (sequence > 0 && effectiveLastSeq > 0 && sequence < effectiveLastSeq) {
+                log_.warn("[CTRL] Comando obsoleto rechazado (seq=" + std::to_string(sequence) +
+                          " < last=" + std::to_string(effectiveLastSeq) + ")");
+                telemetry_.publishCommandAck(
+                    commandId,
+                    sequence,
+                    "STALE_REJECTED",
+                    "REMOTE_COMMAND",
+                    0U,
+                    parsedChannel,
+                    false,
+                    "Out-of-order stale command sequence rejected");
+                return;
+            }
+
+            // 3. Si el campo "command" ya trae un comando canónico (ej. "switch1:off", "startup:on", "pulse:on,500", "sled:on")
+            if (doc["command"].is<const char*>()) {
+                std::string explicitCmd = doc["command"].as<const char*>();
+                if (explicitCmd.rfind("switch", 0) == 0 ||
+                    explicitCmd.rfind("startup:", 0) == 0 ||
+                    explicitCmd.rfind("pulse:", 0) == 0 ||
+                    explicitCmd.rfind("sled:", 0) == 0 ||
+                    explicitCmd == "all:on" ||
+                    explicitCmd == "all:off" ||
+                    explicitCmd == "toggle_all" ||
+                    explicitCmd == "reset" ||
+                    explicitCmd == "status") {
+                    cmd = explicitCmd;
+                }
+            }
+
+            if (cmd.front() == '{') {
+                std::string actLower = actionStr;
+                for (char& ch : actLower) {
+                    if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
+                }
+                const bool isAll = (actLower == "set_power_all" || (doc["all"] | false) || (!payloadObj.isNull() && (payloadObj["all"] | false)));
+
+                auto resolveBoolState = [&](bool& outHasBool, bool& outVal, bool& outToggle) {
+                    outHasBool = false;
+                    outVal = false;
+                    outToggle = false;
+
+                    auto inspectVar = [&](JsonVariantConst v) -> bool {
+                        if (v.isNull()) return false;
+                        if (v.is<bool>()) {
+                            outHasBool = true;
+                            outVal = v.as<bool>();
+                            return true;
+                        }
+                        if (v.is<int>()) {
+                            outHasBool = true;
+                            outVal = (v.as<int>() != 0);
+                            return true;
+                        }
+                        if (v.is<const char*>()) {
+                            const char* s = v.as<const char*>();
+                            if (!s) return false;
+                            if (std::strcmp(s, "on") == 0 || std::strcmp(s, "ON") == 0 || std::strcmp(s, "true") == 0 || std::strcmp(s, "1") == 0) {
+                                outHasBool = true;
+                                outVal = true;
+                                return true;
+                            }
+                            if (std::strcmp(s, "off") == 0 || std::strcmp(s, "OFF") == 0 || std::strcmp(s, "false") == 0 || std::strcmp(s, "0") == 0) {
+                                outHasBool = true;
+                                outVal = false;
+                                return true;
+                            }
+                            if (std::strcmp(s, "toggle") == 0 || std::strcmp(s, "TOGGLE") == 0) {
+                                outToggle = true;
+                                return true;
+                            }
+                        }
+                        return false;
+                    };
+
+                    if (inspectVar(doc["desiredState"])) return;
+                    if (inspectVar(doc["switch"])) return;
+                    if (inspectVar(doc["state"])) return;
+                    if (!payloadObj.isNull()) {
+                        if (inspectVar(payloadObj["desiredState"])) return;
+                        if (inspectVar(payloadObj["switch"])) return;
+                        if (inspectVar(payloadObj["state"])) return;
+                    }
+                    if (payloadVar.is<const char*>()) {
+                        inspectVar(payloadVar);
+                    }
+                };
+
+                bool hasState = false;
+                bool desiredOn = false;
+                bool isToggle = (actLower == "toggle" || actLower == "toggle_switch" || actLower == "toggle_all");
+                resolveBoolState(hasState, desiredOn, isToggle);
+
+                if (actLower == "reset" || actLower == "reboot") {
+                    cmd = "reset";
+                } else if (actLower == "toggle_all" || (isAll && isToggle)) {
+                    cmd = "toggle_all";
+                } else if (hasState) {
+                    cmd = isAll
+                        ? (desiredOn ? "all:on" : "all:off")
+                        : ("switch" + std::to_string(parsedChannel) + (desiredOn ? ":on" : ":off"));
+                } else if (isToggle) {
+                    cmd = "switch" + std::to_string(parsedChannel) + ":toggle";
+                }
+            }
         }
     }
 
+    if (sequence > 0) {
+        lastCommandSequence_ = sequence;
+        relays_.setLastCommandSequence(sequence);
+    }
+
+    auto emitAckIfNeeded = [&](int ackCh, bool reported) {
+        if (!commandId.empty()) {
+            const uint32_t execUs = readMicrosSafe() - startUs;
+            recordProcessedCommand(commandId, sequence, ackCh, reported);
+            telemetry_.publishCommandAck(commandId, sequence, "APPLIED", "REMOTE_COMMAND", execUs, ackCh, false);
+        }
+    };
+
     if (cmd == "reset") {
-        telemetry_.publishEvent("SYSTEM_RESET", "Reinicio del sistema solicitado");
-        clock_.sleepMs(1000);
+        emitAckIfNeeded(1, false);
+        telemetry_.publishEvent("SYSTEM_RESET", "Reinicio del sistema solicitado", "", "REMOTE_COMMAND");
+        clock_.sleepMs(500);
         system_.reboot();
     } else if (cmd == "status") {
         telemetry_.publishStatus();
-    } else if (cmd == "toggle_all") {
-        relays_.toggleAll(now);
         const auto states = relays_.getAllStates();
-        const std::string newStateStr = (!states.empty() && states.front().currentState) ? "on" : "off";
-        telemetry_.publishEvent("RELAY_TOGGLE_ALL", "Todos los relays cambiados de estado", newStateStr);
-        telemetry_.publishStatus();
+        emitAckIfNeeded(1, !states.empty() && states.front().currentState);
+    } else if (cmd == "toggle_all") {
+        relays_.toggleAll(now, "REMOTE_COMMAND");
+        const auto states = relays_.getAllStates();
+        const bool firstOn = (!states.empty() && states.front().currentState);
+        const std::string newStateStr = firstOn ? "on" : "off";
+        emitAckIfNeeded(1, firstOn);
         telemetry_.publishAllRelayStates();
+        telemetry_.publishStatus();
+        telemetry_.publishEvent("RELAY_TOGGLE_ALL", "Todos los relays cambiados de estado", newStateStr, "REMOTE_COMMAND");
         if (onStateChangeCb_) onStateChangeCb_();
     } else if (cmd == "all:on" || cmd == "all:off") {
         const bool targetOn = (cmd == "all:on");
         for (const auto& r : relays_.getAllStates()) {
             relays_.setDesiredState(r.deviceId, targetOn);
-            relays_.applyDesiredState(r.deviceId, now);
+            relays_.applyDesiredState(r.deviceId, now, "REMOTE_COMMAND");
         }
-        telemetry_.publishEvent("DEVICE_COMMAND", targetOn ? "Comando all:on" : "Comando all:off", targetOn ? "on" : "off");
-        telemetry_.publishStatus();
+        const auto states = relays_.getAllStates();
+        const bool verifiedOn = (!states.empty() && states.front().currentState);
+        emitAckIfNeeded(1, verifiedOn);
         telemetry_.publishAllRelayStates();
+        telemetry_.publishStatus();
+        telemetry_.publishEvent("DEVICE_COMMAND", targetOn ? "Comando all:on" : "Comando all:off", verifiedOn ? "on" : "off", "REMOTE_COMMAND");
         if (onStateChangeCb_) onStateChangeCb_();
     } else if (cmd == "sync_states") {
-        telemetry_.publishEvent("STATE_SYNC", "Sincronización de estados solicitada");
-        relays_.setInitialSyncCompleted(false);
-        telemetry_.requestCurrentStates();
+        telemetry_.publishStatus();
+        const auto states = relays_.getAllStates();
+        emitAckIfNeeded(1, !states.empty() && states.front().currentState);
     } else if (cmd.rfind("switch", 0) == 0 && cmd.find(':') != std::string::npos) {
         const size_t colonPos = cmd.find(':');
         const std::string chStr = cmd.substr(6, colonPos - 6);
@@ -388,25 +557,32 @@ void RelayFirmwareController::processCommand(const std::string& rawCmd) {
         const auto allRelays = relays_.getAllStates();
         if (!allRelays.empty() && targetIdx < allRelays.size()) {
             const std::string targetId = allRelays[targetIdx].deviceId;
-            bool applied = false;
+            bool recognized = false;
             if (subcmd == "on" || subcmd == "1" || subcmd == "true") {
                 relays_.setDesiredState(targetId, true);
-                relays_.applyDesiredState(targetId, now);
-                applied = true;
+                relays_.applyDesiredState(targetId, now, "REMOTE_COMMAND");
+                recognized = true;
             } else if (subcmd == "off" || subcmd == "0" || subcmd == "false") {
                 relays_.setDesiredState(targetId, false);
-                relays_.applyDesiredState(targetId, now);
-                applied = true;
+                relays_.applyDesiredState(targetId, now, "REMOTE_COMMAND");
+                recognized = true;
             } else if (subcmd == "toggle") {
-                relays_.toggle(targetId, now);
-                applied = true;
+                relays_.toggle(targetId, now, "REMOTE_COMMAND");
+                recognized = true;
             }
-            if (applied) {
+            if (recognized) {
+                relays_.verifyHardwareState(targetId);
                 const auto* updated = relays_.getState(targetId);
-                const std::string stateStr = (updated && updated->currentState) ? "on" : "off";
+                const bool verifiedOn = (updated && updated->currentState);
+                const std::string stateStr = verifiedOn ? "on" : "off";
+                emitAckIfNeeded(static_cast<int>(targetIdx + 1U), verifiedOn);
                 telemetry_.publishRelayState(targetId);
                 telemetry_.publishStatus();
-                telemetry_.publishEvent("DEVICE_COMMAND", "Comando switch" + std::to_string(targetIdx + 1U) + ": " + subcmd, stateStr);
+                telemetry_.publishEvent(
+                    "DEVICE_COMMAND",
+                    "Comando switch" + std::to_string(targetIdx + 1U) + ": " + subcmd,
+                    stateStr,
+                    "REMOTE_COMMAND");
                 if (onStateChangeCb_) onStateChangeCb_();
             }
         }
@@ -414,19 +590,25 @@ void RelayFirmwareController::processCommand(const std::string& rawCmd) {
         std::string modeStr = cmd.substr(8);
         domain::StartupMode mode = domain::startupModeFromString(modeStr);
         relays_.setStartupMode(mode);
-        telemetry_.publishEvent("STARTUP_MODE_CHANGED", "StartupMode configurado a " + std::string(domain::startupModeToString(mode)));
+        const auto states = relays_.getAllStates();
+        emitAckIfNeeded(1, !states.empty() && states.front().currentState);
+        telemetry_.publishStatus();
+        telemetry_.publishEvent("STARTUP_MODE_CHANGED", "StartupMode configurado a " + std::string(domain::startupModeToString(mode)), "", "REMOTE_COMMAND");
         if (onStateChangeCb_) onStateChangeCb_();
     } else if (cmd.rfind("pulse:", 0) == 0) {
         std::string sub = cmd.substr(6);
         if (sub == "off" || sub == "0") {
             relays_.configurePulse(false, relays_.getPulseWidthMs(), now);
-            telemetry_.publishEvent("PULSE_CONFIG_CHANGED", "Modo pulso desactivado");
+            telemetry_.publishEvent("PULSE_CONFIG_CHANGED", "Modo pulso desactivado", "", "REMOTE_COMMAND");
         } else if (sub.rfind("on,", 0) == 0) {
             uint32_t widthMs = static_cast<uint32_t>(std::strtoul(sub.substr(3).c_str(), nullptr, 10));
             if (relays_.configurePulse(true, widthMs, now)) {
-                telemetry_.publishEvent("PULSE_CONFIG_CHANGED", "Modo pulso activado (" + std::to_string(widthMs) + " ms)");
+                telemetry_.publishEvent("PULSE_CONFIG_CHANGED", "Modo pulso activado (" + std::to_string(widthMs) + " ms)", "", "REMOTE_COMMAND");
             }
         }
+        const auto states = relays_.getAllStates();
+        emitAckIfNeeded(1, !states.empty() && states.front().currentState);
+        telemetry_.publishStatus();
         if (onStateChangeCb_) onStateChangeCb_();
     } else if (cmd.rfind("sled:", 0) == 0) {
         std::string sub = cmd.substr(5);
@@ -435,8 +617,13 @@ void RelayFirmwareController::processCommand(const std::string& rawCmd) {
         if (configRepo_) {
             configRepo_->saveSledOnline(en);
         }
-        telemetry_.publishEvent("SLED_CONFIG_CHANGED", std::string("Indicador LED online: ") + (en ? "on" : "off"));
+        const auto states = relays_.getAllStates();
+        emitAckIfNeeded(1, !states.empty() && states.front().currentState);
+        telemetry_.publishStatus();
+        telemetry_.publishEvent("SLED_CONFIG_CHANGED", std::string("Indicador LED online: ") + (en ? "on" : "off"), "", "REMOTE_COMMAND");
         if (onStateChangeCb_) onStateChangeCb_();
+    } else if (!commandId.empty()) {
+        telemetry_.publishCommandAck(commandId, sequence, "FAILED", "REMOTE_COMMAND", 0U, parsedChannel, false, "Unsupported command");
     }
 }
 
@@ -464,14 +651,18 @@ void RelayFirmwareController::handleTimersPayload(const std::string& payload) {
         if (deserializeJson(innerDoc, doc["payload"].as<const char*>()) == DeserializationError::Ok) {
             if (innerDoc.is<JsonArray>()) {
                 TimerJsonCodec::applyTimersFromJsonArray(innerDoc.as<JsonArrayConst>(), *timerScheduler_, timeProvider_.epochSeconds());
-                telemetry_.publishEvent("TIMERS_UPDATED", "Temporizadores sincronizados por MQTT5: " + std::to_string(timerScheduler_->getActiveTimerCount()) + " activos");
-                telemetry_.publishStatus();
+                telemetry_.publishTimersEvent(
+                    "TIMERS_UPDATED",
+                    "Temporizadores sincronizados por MQTT5: " + std::to_string(timerScheduler_->getActiveTimerCount()) + " activos",
+                    *timerScheduler_);
                 if (onStateChangeCb_) onStateChangeCb_();
                 return;
             } else if (innerDoc["timers"].is<JsonArray>()) {
                 TimerJsonCodec::applyTimersFromJsonArray(innerDoc["timers"].as<JsonArrayConst>(), *timerScheduler_, timeProvider_.epochSeconds());
-                telemetry_.publishEvent("TIMERS_UPDATED", "Temporizadores sincronizados por MQTT5: " + std::to_string(timerScheduler_->getActiveTimerCount()) + " activos");
-                telemetry_.publishStatus();
+                telemetry_.publishTimersEvent(
+                    "TIMERS_UPDATED",
+                    "Temporizadores sincronizados por MQTT5: " + std::to_string(timerScheduler_->getActiveTimerCount()) + " activos",
+                    *timerScheduler_);
                 if (onStateChangeCb_) onStateChangeCb_();
                 return;
             }
@@ -483,11 +674,13 @@ void RelayFirmwareController::handleTimersPayload(const std::string& payload) {
         return;
     }
 
+    // GARANTÍA DE AISLAMIENTO: actualizar o eliminar schedules/timers modifica ÚNICAMENTE
+    // la tabla de automatizaciones y jamás acciona ni restaura el estado del relé.
     TimerJsonCodec::applyTimersFromJsonArray(timersArr, *timerScheduler_, timeProvider_.epochSeconds());
-    telemetry_.publishEvent(
+    telemetry_.publishTimersEvent(
         "TIMERS_UPDATED",
-        "Temporizadores sincronizados por MQTT5: " + std::to_string(timerScheduler_->getActiveTimerCount()) + " activos");
-    telemetry_.publishStatus();
+        "Temporizadores sincronizados por MQTT5: " + std::to_string(timerScheduler_->getActiveTimerCount()) + " activos",
+        *timerScheduler_);
     if (onStateChangeCb_) onStateChangeCb_();
 }
 
@@ -504,7 +697,7 @@ void RelayFirmwareController::handleWifiPayload(const std::string& payload) {
         root = doc["payload"].as<JsonObjectConst>();
     }
 
-    const char* rawSsid = root["ssid"] | (root["wifi_ssid"] | nullptr);
+    const char* rawSsid = root["ssid"] | (root["wifi_ssid"] | "");
     const char* rawPass = root["password"] | (root["wifi_pass"] | "");
     const char* rawReqId = root["request_id"] | (root["requestId"] | "");
 

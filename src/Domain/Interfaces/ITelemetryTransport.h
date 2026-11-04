@@ -16,7 +16,7 @@ public:
     virtual void disconnect() = 0;
     virtual bool isConnected() const = 0;
 
-    virtual bool publish(const std::string& topic, const std::string& payload) = 0;
+    virtual bool publish(const std::string& topic, const std::string& payload, bool retain = false) = 0;
     virtual void subscribe(const std::string& topic) = 0;
     virtual void onMessage(MessageHandler handler) = 0;
     virtual void onConnect(std::function<void()> cb) = 0;

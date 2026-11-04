@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 #include "Domain/Entities/DeviceEvent.h"
@@ -17,7 +18,9 @@ public:
                                      const domain::SystemMetrics& metrics,
                                      const std::vector<domain::RelayState>& relays,
                                      const std::string& timestamp,
-                                     bool syncCompleted) = 0;
+                                     bool syncCompleted,
+                                     uint32_t stateVersion = 0,
+                                     const std::string& lastSource = "") = 0;
 
     virtual std::string formatEvent(const domain::DeviceIdentity& id,
                                     const domain::DeviceEvent& event,
@@ -27,7 +30,8 @@ public:
     virtual std::string formatTelemetry(const domain::DeviceIdentity& id,
                                         const domain::SystemMetrics& metrics,
                                         const std::vector<domain::RelayState>& relays,
-                                        const std::string& timestamp) = 0;
+                                        const std::string& timestamp,
+                                        uint32_t stateVersion = 0) = 0;
 };
 
 }
