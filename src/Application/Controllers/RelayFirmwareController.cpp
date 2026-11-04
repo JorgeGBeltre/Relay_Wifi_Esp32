@@ -75,15 +75,14 @@ void RelayFirmwareController::onMqttConnected() {
 
     connectivity_.transport().subscribe(topics_.commands);
     connectivity_.transport().subscribe(topics_.deviceEvents);
-    connectivity_.transport().subscribe(topics_.ota);
 
     for (const auto& r : relays_.getAllStates()) {
-        connectivity_.transport().subscribe(r.topic + "/state");
-        connectivity_.transport().subscribe(r.topic + "/command");
-        connectivity_.transport().subscribe(r.topic + "_state");
+        connectivity_.transport().subscribe(topics_.relay(r.topic, "/state"));
+        connectivity_.transport().subscribe(topics_.relay(r.topic, "/command"));
+        connectivity_.transport().subscribe(topics_.relay(r.topic, "_state"));
     }
 
-    telemetry_.publishEvent("MQTT_CONNECTED", "Conexión MQTTS segura establecida");
+    telemetry_.publishEvent("MQTT_CONNECTED", "Conexión MQTT establecida");
     telemetry_.requestCurrentStates();
     telemetry_.publishStatus();
     lastStatusPublishMs_ = clock_.nowMs();
@@ -203,17 +202,20 @@ void RelayFirmwareController::handleIncomingMessage(const std::string& topic, co
     const unsigned long now = clock_.nowMs();
     log_.info("[CTRL] Mensaje recibido en [" + topic + "]: " + payload);
 
-    if (topic == topics_.commands) {
+    if (topic == topics_.commands || topic == topics_.deviceEvents) {
         processCommand(payload);
         return;
     }
 
     for (const auto& r : relays_.getAllStates()) {
-        std::string setTopic = r.topic + "/state";
-        std::string cmdTopic = r.topic + "/command";
-        std::string stateTopic = r.topic + "_state";
+        std::string setTopic = topics_.relay(r.topic, "/state");
+        std::string cmdTopic = topics_.relay(r.topic, "/command");
+        std::string stateTopic = topics_.relay(r.topic, "_state");
+        std::string legacySetTopic = r.topic + "/state";
+        std::string legacyCmdTopic = r.topic + "/command";
+        std::string legacyStateTopic = r.topic + "_state";
 
-        if (topic == setTopic || topic == cmdTopic) {
+        if (topic == setTopic || topic == cmdTopic || topic == legacySetTopic || topic == legacyCmdTopic) {
             bool turnOn = (payload == "on" || payload == "1" || payload == "true");
             bool turnOff = (payload == "off" || payload == "0" || payload == "false");
             bool doToggle = (payload == "toggle");
@@ -233,7 +235,7 @@ void RelayFirmwareController::handleIncomingMessage(const std::string& topic, co
             telemetry_.publishRelayState(r.deviceId);
             if (onStateChangeCb_) onStateChangeCb_();
             return;
-        } else if (topic == stateTopic) {
+        } else if (topic == stateTopic || topic == legacyStateTopic) {
             bool serverState = (payload == "on" || payload == "1" || payload == "true");
             relays_.setDesiredState(r.deviceId, serverState);
             relays_.applyDesiredState(r.deviceId, now);
@@ -250,8 +252,46 @@ void RelayFirmwareController::handleIncomingMessage(const std::string& topic, co
     }
 }
 
-void RelayFirmwareController::processCommand(const std::string& cmd) {
+void RelayFirmwareController::processCommand(const std::string& rawCmd) {
     const unsigned long now = clock_.nowMs();
+    std::string cmd = rawCmd;
+
+    // Compatibilidad defensiva con sobres JSON del servidor (p.ej. {"command":"...","payload":...})
+    if (!cmd.empty() && cmd.front() == '{') {
+        auto toLower = [](std::string s) {
+            for (char& ch : s) {
+                if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
+            }
+            return s;
+        };
+        std::string lower = toLower(cmd);
+        if (lower.find("\"reset\"") != std::string::npos || lower.find("\"reboot\"") != std::string::npos) {
+            cmd = "reset";
+        } else if (lower.find("\"toggle_all\"") != std::string::npos || lower.find("\"toggle\"") != std::string::npos) {
+            cmd = "toggle_all";
+        } else if (lower.find("\"switch\":\"on\"") != std::string::npos ||
+                   lower.find("\\\"switch\\\":\\\"on\\\"") != std::string::npos ||
+                   lower.find("\"state\":\"on\"") != std::string::npos ||
+                   lower.find("\\\"state\\\":\\\"on\\\"") != std::string::npos ||
+                   lower.find("\"state\":true") != std::string::npos ||
+                   lower.find("\\\"state\\\":true") != std::string::npos ||
+                   lower.find("\"state\":1") != std::string::npos ||
+                   lower.find("\\\"state\\\":1") != std::string::npos ||
+                   lower.find("\"payload\":\"on\"") != std::string::npos) {
+            cmd = "switch1:on";
+        } else if (lower.find("\"switch\":\"off\"") != std::string::npos ||
+                   lower.find("\\\"switch\\\":\\\"off\\\"") != std::string::npos ||
+                   lower.find("\"state\":\"off\"") != std::string::npos ||
+                   lower.find("\\\"state\\\":\\\"off\\\"") != std::string::npos ||
+                   lower.find("\"state\":false") != std::string::npos ||
+                   lower.find("\\\"state\\\":false") != std::string::npos ||
+                   lower.find("\"state\":0") != std::string::npos ||
+                   lower.find("\\\"state\\\":0") != std::string::npos ||
+                   lower.find("\"payload\":\"off\"") != std::string::npos) {
+            cmd = "switch1:off";
+        }
+    }
+
     if (cmd == "reset") {
         telemetry_.publishEvent("SYSTEM_RESET", "Reinicio del sistema solicitado");
         clock_.sleepMs(1000);

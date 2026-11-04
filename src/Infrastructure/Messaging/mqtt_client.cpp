@@ -32,7 +32,7 @@ void initMQTT(const char* server, uint16_t port,
     g_apiKey = apiKey;
     g_firmwareVersion = firmwareVersion;
 
-    configureNetworkClient(rootCa);
+    configureNetworkClient(rootCa, port);
 
     Serial.printf("[MQTT5] Inicializando broker %s:%d con cliente %s...\n",
                   server, port, clientId);
@@ -47,7 +47,7 @@ void initMQTT(const char* server, uint16_t port,
     MQTTProperties willProps;
     willProps.setContentType("application/json");
     willProps.setWillDelay(5);
-    String willTopic = "status";
+    String willTopic = "status/" + g_clientId;
     String willPayload = "{\"status\":\"offline\",\"device_id\":\"" + g_clientId + "\"}";
     mqtt.setWill(willTopic, willPayload, 1, true, &willProps);
 

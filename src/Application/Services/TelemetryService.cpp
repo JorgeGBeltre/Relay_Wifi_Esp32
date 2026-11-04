@@ -40,7 +40,7 @@ void TelemetryService::publishRelayState(const std::string& deviceId) {
     if (!relay) return;
 
     std::string stateStr = relay->currentState ? "on" : "off";
-    std::string topic = relay->topic + "_state";
+    std::string topic = topics_.relay(relay->topic, "_state");
 
     connectivity_.transport().publish(topic, stateStr);
     log_.info("[TELEM] Estado de relé " + deviceId + " publicado en " + topic + " -> " + stateStr);
@@ -72,7 +72,7 @@ void TelemetryService::requestCurrentStates() {
     if (!connectivity_.transport().isConnected()) return;
 
     for (const auto& r : relays_.getAllStates()) {
-        std::string reqTopic = r.topic + "/get";
+        std::string reqTopic = topics_.relay(r.topic, "/get");
         connectivity_.transport().publish(reqTopic, "status");
         log_.info("[TELEM] Solicitando estado del servidor en " + reqTopic);
     }

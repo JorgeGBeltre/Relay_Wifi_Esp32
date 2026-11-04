@@ -11,6 +11,7 @@ struct MqttTopics {
     std::string ota;
     std::string status;
     std::string deviceEvents;
+    std::string devicePrefix;
     std::string switchSet;
     std::string switchCommand;
     std::string switchState;
@@ -18,17 +19,25 @@ struct MqttTopics {
 
     static MqttTopics forDevice(const std::string& chipId, const std::string& baseSwitch = "device_switch1") {
         MqttTopics t;
-        t.telemetry     = "telemetry";
-        t.events        = "events";
-        t.commands      = "commands";
-        t.ota           = "ota";
-        t.status        = "status";
+        t.telemetry     = "telemetry/" + chipId;
+        t.events        = "events/" + chipId;
+        t.commands      = "commands/" + chipId;
+        t.ota           = "ota/" + chipId;
+        t.status        = "status/" + chipId;
         t.deviceEvents  = "event/" + chipId;
-        t.switchSet     = baseSwitch + "/state";
-        t.switchCommand = baseSwitch + "/command";
-        t.switchState   = baseSwitch + "_state";
-        t.switchGet     = baseSwitch + "/get";
+        t.devicePrefix  = "devices/" + chipId;
+        t.switchSet     = t.devicePrefix + "/" + baseSwitch + "/state";
+        t.switchCommand = t.devicePrefix + "/" + baseSwitch + "/command";
+        t.switchState   = t.devicePrefix + "/" + baseSwitch + "_state";
+        t.switchGet     = t.devicePrefix + "/" + baseSwitch + "/get";
         return t;
+    }
+
+    std::string relay(const std::string& base, const std::string& suffix) const {
+        if (devicePrefix.empty()) {
+            return base + suffix;
+        }
+        return devicePrefix + "/" + base + suffix;
     }
 };
 

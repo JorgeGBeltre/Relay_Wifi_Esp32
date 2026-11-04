@@ -20,9 +20,10 @@ public:
 
         WiFiManager wifiManager;
         uint64_t chipID = ESP.getEfuseMac();
-        // Preserva íntegramente el SSID VESIS-<ChipID> y contraseña "12345678"
-        String apSSID = "VESIS-" + String((uint16_t)(chipID >> 32), DEC) +
-                        String((uint32_t)chipID, DEC);
+        char chipHex[16];
+        snprintf(chipHex, sizeof(chipHex), "%04X%08X", (uint16_t)(chipID >> 32), (uint32_t)chipID);
+        // Preserva el SSID VESIS-<ChipID> en formato HEX canónico de 12 caracteres y contraseña "12345678"
+        String apSSID = String("VESIS-") + (config.device_id.length() > 0 ? config.device_id : String(chipHex));
         const char* apPassword = "12345678";
 
         Serial.printf("[PROVISION] Iniciando Compatible SoftAP: %s (Clave: %s)\n",
@@ -57,39 +58,67 @@ public:
             portalSaved = true;
         });
 
-        // Endpoints JSON de Compatible Pairing Mode (GET /device y POST /ap)
+        // Endpoints JSON de Compatible Pairing Mode (GET /device + /api/info y POST /ap + /api/wifi)
         wifiManager.setWebServerCallback([&]() {
             if (!wifiManager.server) return;
 
-            wifiManager.server->on("/device", HTTP_GET, [&]() {
-                char chipHex[16];
-                snprintf(chipHex, sizeof(chipHex), "%04X%08X", (uint16_t)(chipID >> 32), (uint32_t)chipID);
-                StaticJsonDocument<256> doc;
-                doc["deviceid"]    = config.device_id.length() > 0 ? config.device_id.c_str() : chipHex;
-                doc["apikey"]      = config.device_key.c_str();
-                doc["chipid"]      = chipHex;
-                doc["device_type"] = "Relay-Wifi";
-                doc["accept"]      = "post";
+            auto handleDeviceInfo = [&]() {
+                StaticJsonDocument<512> doc;
+                const char* resolvedId = config.device_id.length() > 0 ? config.device_id.c_str() : chipHex;
+                const bool wifiConn = (WiFi.status() == WL_CONNECTED);
+                const bool hasWifi = hasValidWifiCredentials();
+                const bool hasBroker = hasValidBrokerCredentials();
+                const char* cfgState = resolveDeviceConfigState(wifiConn, false);
+
+                doc["deviceid"]               = resolvedId;
+                doc["device_id"]              = resolvedId;
+                doc["chipid"]                 = chipHex;
+                doc["chip_id"]                = chipHex;
+                doc["apikey"]                 = hasWifi ? config.device_key.c_str() : "00000000-0000-0000-0000-000000000000";
+                doc["devicekey"]              = config.device_key.c_str();
+                doc["device_type"]            = "Relay-Wifi";
+                doc["model"]                  = "Relay-Wifi";
+                doc["version"]                = FIRMWARE_VERSION;
+                doc["config_state"]           = cfgState;
+                doc["provisioning_mode"]      = true;
+                doc["factory_mode"]           = !hasWifi;
+                doc["has_wifi_credentials"]   = hasWifi;
+                doc["has_broker_credentials"] = hasBroker;
+                doc["wifi_connected"]         = wifiConn;
+                doc["configured_ssid"]        = config.wifi_ssid;
+                doc["last_wifi_error"]        = config.last_wifi_error;
+                JsonArray methods = doc.createNestedArray("methods");
+                methods.add("ble");
+                methods.add("softap");
+                methods.add("smartconfig");
+                methods.add("lan");
+                doc["accept"]                 = "post";
+
                 String out;
                 serializeJson(doc, out);
                 wifiManager.server->send(200, "application/json", out);
-            });
+            };
 
-            wifiManager.server->on("/ap", HTTP_POST, [&]() {
+            auto handleApPost = [&]() {
                 String body = wifiManager.server->arg("plain");
-                StaticJsonDocument<512> doc;
+                StaticJsonDocument<1024> doc;
                 if (deserializeJson(doc, body) != DeserializationError::Ok ||
                     (!doc.containsKey("ssid") && !doc.containsKey("wifi_ssid"))) {
-                    wifiManager.server->send(400, "application/json", "{\"error\":400}");
+                    wifiManager.server->send(400, "application/json", "{\"error\":400,\"reason\":\"invalid_payload\"}");
                     return;
                 }
 
-                if (doc.containsKey("ssid")) config.wifi_ssid = doc["ssid"].as<String>();
-                else if (doc.containsKey("wifi_ssid")) config.wifi_ssid = doc["wifi_ssid"].as<String>();
+                String nextSsid = doc.containsKey("ssid") ? doc["ssid"].as<String>() : doc["wifi_ssid"].as<String>();
+                if (nextSsid.length() == 0 || nextSsid.length() > 32) {
+                    wifiManager.server->send(400, "application/json", "{\"error\":400,\"reason\":\"invalid_ssid\"}");
+                    return;
+                }
+                config.wifi_ssid = nextSsid;
 
                 if (doc.containsKey("password")) config.wifi_pass = doc["password"].as<String>();
                 else if (doc.containsKey("pass")) config.wifi_pass = doc["pass"].as<String>();
                 else if (doc.containsKey("wifi_pass")) config.wifi_pass = doc["wifi_pass"].as<String>();
+                else config.wifi_pass = "";
 
                 if (doc.containsKey("serverName")) config.mqtt_broker = doc["serverName"].as<String>();
                 else if (doc.containsKey("mqtt_broker")) config.mqtt_broker = doc["mqtt_broker"].as<String>();
@@ -104,6 +133,7 @@ public:
 
                 if (doc.containsKey("mqtt_pass")) config.mqtt_pass = doc["mqtt_pass"].as<String>();
                 if (doc.containsKey("devicekey")) config.device_key = doc["devicekey"].as<String>();
+                else if (doc.containsKey("device_key")) config.device_key = doc["device_key"].as<String>();
                 if (doc.containsKey("bind_token")) config.bind_token = doc["bind_token"].as<String>();
                 else if (doc.containsKey("token")) config.bind_token = doc["token"].as<String>();
 
@@ -129,10 +159,17 @@ public:
                     config.sled_online = (sl != "off" && sl != "0" && sl != "false");
                 }
 
-                wifiManager.server->send(200, "application/json", "{\"error\":0}");
+                config.last_wifi_error = "";
+                wifiManager.server->send(200, "application/json", "{\"error\":0,\"ack\":\"received\"}");
+                delay(150);
                 jsonApSaved = true;
                 portalSaved = true;
-            });
+            };
+
+            wifiManager.server->on("/device", HTTP_GET, handleDeviceInfo);
+            wifiManager.server->on("/api/info", HTTP_GET, handleDeviceInfo);
+            wifiManager.server->on("/ap", HTTP_POST, handleApPost);
+            wifiManager.server->on("/api/wifi", HTTP_POST, handleApPost);
         });
 
         wifiManager.setConfigPortalBlocking(false);
@@ -177,7 +214,7 @@ public:
             delay(20);
         }
 
-        if (!cancelledByButton && (portalSaved || WiFi.status() == WL_CONNECTED || WiFi.SSID().length() > 0)) {
+        if (!cancelledByButton && (portalSaved || jsonApSaved)) {
             if (!jsonApSaved) {
                 if (WiFi.SSID().length() > 0) {
                     config.wifi_ssid = WiFi.SSID();
@@ -208,16 +245,18 @@ public:
                 }
             }
 
-            // Persistir en el namespace 'relay-config' de NVS para que isProvisioned() sea true tras reiniciar
+            // Persistir en el namespace 'relay-config' de NVS
             saveConfig();
-            Serial.printf("[PROVISION] Credenciales guardadas en NVS (SSID: %s). Reiniciando...\n",
+            Serial.printf("[PROVISION] Credenciales guardadas en NVS por SoftAP (SSID: %s).\n",
                           config.wifi_ssid.c_str());
-            delay(200);
-            ESP.restart();
+            delay(250);
+            wifiManager.stopConfigPortal();
+            WiFi.mode(WIFI_STA);
             return true;
         }
 
         Serial.println("[PROVISION] Portal SoftAP finalizado sin cambios.");
+        wifiManager.stopConfigPortal();
         WiFi.mode(WIFI_STA);
         return false;
     }

@@ -23,15 +23,20 @@ struct AppConfig {
     bool     pulse_enabled    = false; // Modo pulso (Inching)
     uint32_t pulse_width_ms   = 500;   // Ancho de pulso en ms (500..36000000, paso 500)
     bool     sled_online      = true;  // Indicador LED de estado en línea (sledOnline)
+    String   last_wifi_error;          // Último motivo verificable de fallo Wi-Fi (auth_failed, ap_not_found, etc.)
 };
 
 extern AppConfig config;
 
 void initConfig(const char* defaultDeviceId = nullptr);
 bool isProvisioned();
+bool hasValidWifiCredentials();
+bool hasValidBrokerCredentials();
+const char* resolveDeviceConfigState(bool wifiConnected, bool mqttConnected);
 void saveConfig();
 void loadConfig();
 void resetConfig();
+bool saveLastWifiErrorNvs(const char* err);
 
 bool saveLastRelayStateNvs(bool state);
 bool saveStartupModeNvs(uint8_t mode);

@@ -1,11 +1,34 @@
 #include "Infrastructure/Net/WifiLink.h"
+#include "Infrastructure/Config/nvs_config.h"
 #include <Arduino.h>
 #include <WiFi.h>
 
 namespace relay::infra {
 
+static bool s_wifiEventRegistered = false;
+static void registerRuntimeWifiReasonTracker() {
+    if (s_wifiEventRegistered) return;
+    s_wifiEventRegistered = true;
+    WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+        if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
+            saveLastWifiErrorNvs("");
+        } else if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+            uint8_t reason = info.wifi_sta_disconnected.reason;
+            if (reason == 201) {
+                saveLastWifiErrorNvs("ap_not_found");
+            } else if (reason == 2 || reason == 15 || reason == 202 || reason == 203 || reason == 204) {
+                saveLastWifiErrorNvs("auth_failed");
+            }
+        }
+    });
+}
+
 bool WifiLink::connect() {
-    if (WiFi.status() == WL_CONNECTED) return true;
+    registerRuntimeWifiReasonTracker();
+    if (WiFi.status() == WL_CONNECTED) {
+        saveLastWifiErrorNvs("");
+        return true;
+    }
 
     if (ssid_.empty()) {
         return false;
@@ -22,6 +45,7 @@ bool WifiLink::connect() {
     }
 
     if (WiFi.status() == WL_CONNECTED) {
+        saveLastWifiErrorNvs("");
         Serial.printf("[WIFI] ¡Conectado! IP: %s, RSSI: %d dBm\n",
                       WiFi.localIP().toString().c_str(), WiFi.RSSI());
         return true;

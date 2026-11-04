@@ -1,6 +1,8 @@
 #include "Infrastructure/Net/LanZeroconfServer.h"
 #include "Application/Services/CryptoUtils.h"
 #include "Infrastructure/Config/config.h"
+#include "Infrastructure/Config/nvs_config.h"
+#include "Infrastructure/Messaging/mqtt_client.h"
 #include <ArduinoJson.h>
 #include <ESPmDNS.h>
 #include <WiFi.h>
@@ -40,13 +42,13 @@ void LanZeroconfServer::startServer() {
     if (running_) return;
 
     char hostName[48];
-    std::snprintf(hostName, sizeof(hostName), "eWeLink_%s", activeDeviceId_.c_str());
+    std::snprintf(hostName, sizeof(hostName), "iot_%s", activeDeviceId_.c_str());
     if (MDNS.begin(hostName)) {
-        MDNS.addService("_ewelink", "_tcp", port_);
-        MDNS.addServiceTxt("_ewelink", "_tcp", "txtvers", "1");
-        MDNS.addServiceTxt("_ewelink", "_tcp", "id", activeDeviceId_.c_str());
-        MDNS.addServiceTxt("_ewelink", "_tcp", "type", "enhanced_plug");
-        MDNS.addServiceTxt("_ewelink", "_tcp", "apivers", "1");
+        MDNS.addService("_iot", "_tcp", port_);
+        MDNS.addServiceTxt("_iot", "_tcp", "txtvers", "1");
+        MDNS.addServiceTxt("_iot", "_tcp", "id", activeDeviceId_.c_str());
+        MDNS.addServiceTxt("_iot", "_tcp", "type", "Relay-Wifi");
+        MDNS.addServiceTxt("_iot", "_tcp", "apivers", "1");
     }
 
     registerEndpoint("/zeroconf/switch");
@@ -61,17 +63,78 @@ void LanZeroconfServer::startServer() {
     registerEndpoint("/zeroconf/timers");
     registerEndpoint("/zeroconf/ota_unlock");
 
+    server_.on("/zeroconf/info", HTTP_GET, [this]() {
+        char responseBuf[768] = {0};
+        dispatchZeroconf("/zeroconf/info", String("{}"), responseBuf, sizeof(responseBuf));
+        server_.send(200, "application/json", responseBuf);
+    });
+
     server_.begin();
+    udpRunning_ = udp_.begin(48899);
     running_ = true;
     notifyMdnsStateChange();
-    Serial.printf("[LAN] Servidor HTTP Zeroconf iniciado en puerto %u (mDNS: %s.local)\n", port_, hostName);
+    Serial.printf("[LAN] Servidor HTTP Zeroconf iniciado en puerto %u + UDP 48899 (mDNS: %s.local)\n", port_, hostName);
 }
 
 void LanZeroconfServer::stopServer() {
     if (!running_) return;
+    if (udpRunning_) {
+        udp_.stop();
+        udpRunning_ = false;
+    }
     server_.stop();
     MDNS.end();
     running_ = false;
+}
+
+void LanZeroconfServer::handleUdpDiscovery() {
+    if (!udpRunning_) return;
+    int pktLen = udp_.parsePacket();
+    if (pktLen <= 0 || pktLen > 256) return;
+
+    char rxBuf[260] = {0};
+    int readBytes = udp_.read(rxBuf, sizeof(rxBuf) - 1);
+    if (readBytes <= 0) return;
+    rxBuf[readBytes] = '\0';
+
+    if (std::strstr(rxBuf, "IOT_DISCOVER") == nullptr &&
+        std::strstr(rxBuf, "discover") == nullptr) {
+        return;
+    }
+
+    loadConfig();
+    const bool wifiConn = (WiFi.status() == WL_CONNECTED);
+    const bool mqttConn = isMQTTConnected();
+    const char* cfgState = resolveDeviceConfigState(wifiConn, mqttConn);
+
+    StaticJsonDocument<512> doc;
+    doc["device_id"]              = activeDeviceId_.c_str();
+    doc["chip_id"]                = activeDeviceId_.c_str();
+    doc["device_type"]            = "Relay-Wifi";
+    doc["model"]                  = "Relay-Wifi";
+    doc["ip"]                     = WiFi.localIP().toString();
+    doc["port"]                   = port_;
+    doc["version"]                = FIRMWARE_VERSION;
+    doc["config_state"]           = cfgState;
+    doc["provisioning_mode"]      = false;
+    doc["factory_mode"]           = !hasValidWifiCredentials();
+    doc["has_wifi_credentials"]   = hasValidWifiCredentials();
+    doc["has_broker_credentials"] = hasValidBrokerCredentials();
+    doc["wifi_connected"]         = wifiConn;
+    doc["mqtt_connected"]         = mqttConn;
+    doc["configured_ssid"]        = config.wifi_ssid;
+    doc["rssi"]                   = (int)WiFi.RSSI();
+    JsonArray methods = doc.createNestedArray("methods");
+    methods.add("ble");
+    methods.add("softap");
+    methods.add("smartconfig");
+    methods.add("lan");
+
+    char txBuf[512] = {0};
+    size_t n = serializeJson(doc, txBuf, sizeof(txBuf));
+    udp_.beginPacket(udp_.remoteIP(), udp_.remotePort());
+    udp_.write(reinterpret_cast<const uint8_t*>(txBuf), n);
+    udp_.endPacket();
 }
 
 void LanZeroconfServer::loop(bool wifiConnected) {
@@ -83,6 +146,7 @@ void LanZeroconfServer::loop(bool wifiConnected) {
         startServer();
     }
     server_.handleClient();
+    handleUdpDiscovery();
 }
 
 void LanZeroconfServer::notifyMdnsStateChange() {
@@ -104,7 +168,7 @@ void LanZeroconfServer::notifyMdnsStateChange() {
                   relays_.getPulseWidthMs(),
                   indicator_.isSledOnline() ? "on" : "off");
 
-    MDNS.addServiceTxt("_ewelink", "_tcp", "seq", static_cast<const char*>(seqBuf));
+    MDNS.addServiceTxt("_iot", "_tcp", "seq", static_cast<const char*>(seqBuf));
 
     domain::DeviceConfig devCfg;
     configRepo_.load(devCfg);
@@ -116,14 +180,14 @@ void LanZeroconfServer::notifyMdnsStateChange() {
         char dataB64[360] = {0};
         if (app::CryptoUtils::encryptZeroconfPayload(
                 devCfg.deviceKey.c_str(), ivB64, plainData, dataB64, sizeof(dataB64))) {
-            MDNS.addServiceTxt("_ewelink", "_tcp", "encrypt", "true");
-            MDNS.addServiceTxt("_ewelink", "_tcp", "iv", static_cast<const char*>(ivB64));
-            MDNS.addServiceTxt("_ewelink", "_tcp", "data1", static_cast<const char*>(dataB64));
+            MDNS.addServiceTxt("_iot", "_tcp", "encrypt", "true");
+            MDNS.addServiceTxt("_iot", "_tcp", "iv", static_cast<const char*>(ivB64));
+            MDNS.addServiceTxt("_iot", "_tcp", "data1", static_cast<const char*>(dataB64));
             return;
         }
     }
 
-    MDNS.addServiceTxt("_ewelink", "_tcp", "data1", static_cast<const char*>(plainData));
+    MDNS.addServiceTxt("_iot", "_tcp", "data1", static_cast<const char*>(plainData));
 }
 
 void LanZeroconfServer::dispatchZeroconf(const char* uri, const String& rawBody, char* respBuf, size_t respBufSize) {
@@ -259,23 +323,35 @@ void LanZeroconfServer::dispatchZeroconf(const char* uri, const String& rawBody,
 
     if (std::strcmp(uri, "/zeroconf/info") == 0) {
         ++sequence_;
+        loadConfig();
         const auto* st = relays_.getState(relayDeviceId_);
         const bool relayOn = (st && st->currentState);
-        std::snprintf(
-            respBuf, respBufSize,
-            "{\"sequence\":\"%u\",\"seq\":%u,\"error\":0,\"data\":{"
-            "\"deviceid\":\"%s\",\"switch\":\"%s\",\"startup\":\"%s\","
-            "\"pulse\":\"%s\",\"pulseWidth\":%u,\"sledOnline\":\"%s\","
-            "\"fwVersion\":\"%s\",\"rssi\":%d}}",
-            sequence_, sequence_,
-            activeDeviceId_.c_str(),
-            relayOn ? "on" : "off",
-            domain::startupModeToString(relays_.getStartupMode()),
-            relays_.isPulseEnabled() ? "on" : "off",
-            relays_.getPulseWidthMs(),
-            indicator_.isSledOnline() ? "on" : "off",
-            FIRMWARE_VERSION,
-            (int)WiFi.RSSI());
+        const bool wifiConn = (WiFi.status() == WL_CONNECTED);
+        const bool mqttConn = isMQTTConnected();
+        const char* cfgState = resolveDeviceConfigState(wifiConn, mqttConn);
+
+        StaticJsonDocument<512> respDoc;
+        respDoc["sequence"] = String(sequence_);
+        respDoc["seq"]      = sequence_;
+        respDoc["error"]    = 0;
+        JsonObject d = respDoc.createNestedObject("data");
+        d["deviceid"]               = activeDeviceId_.c_str();
+        d["chipid"]                 = activeDeviceId_.c_str();
+        d["device_type"]            = "Relay-Wifi";
+        d["switch"]                 = relayOn ? "on" : "off";
+        d["startup"]                = domain::startupModeToString(relays_.getStartupMode());
+        d["pulse"]                  = relays_.isPulseEnabled() ? "on" : "off";
+        d["pulseWidth"]             = relays_.getPulseWidthMs();
+        d["sledOnline"]             = indicator_.isSledOnline() ? "on" : "off";
+        d["fwVersion"]              = FIRMWARE_VERSION;
+        d["rssi"]                   = (int)WiFi.RSSI();
+        d["config_state"]           = cfgState;
+        d["has_wifi_credentials"]   = hasValidWifiCredentials();
+        d["has_broker_credentials"] = hasValidBrokerCredentials();
+        d["wifi_connected"]         = wifiConn;
+        d["mqtt_connected"]         = mqttConn;
+        d["configured_ssid"]        = config.wifi_ssid;
+        serializeJson(respDoc, respBuf, respBufSize);
         return;
     }
 
@@ -302,11 +378,17 @@ void LanZeroconfServer::dispatchZeroconf(const char* uri, const String& rawBody,
         if (const char* mp = dataObj["mqtt_pass"]) {
             devCfg.mqttPass = mp;
         }
+        if (const char* dk = dataObj["devicekey"] | dataObj["device_key"]) {
+            if (std::strlen(dk) > 0) devCfg.deviceKey = dk;
+        }
         if (const char* tok = dataObj["bind_token"] | dataObj["token"]) {
             devCfg.bindToken = tok;
         }
         configRepo_.save(devCfg);
         writeError(0);
+        if (onCredentialsReload_) {
+            onCredentialsReload_();
+        }
         return;
     }
 

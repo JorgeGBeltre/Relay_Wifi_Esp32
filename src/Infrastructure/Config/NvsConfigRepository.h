@@ -27,7 +27,14 @@ public:
     }
 
     bool save(const domain::DeviceConfig& cfg) override {
+        String prevErr = ::config.last_wifi_error;
+        String prevSsid = ::config.wifi_ssid;
         ::config = fromDomain(cfg);
+        if (::config.wifi_ssid == prevSsid) {
+            ::config.last_wifi_error = prevErr;
+        } else {
+            ::config.last_wifi_error = "";
+        }
         saveConfig();
         return true;
     }

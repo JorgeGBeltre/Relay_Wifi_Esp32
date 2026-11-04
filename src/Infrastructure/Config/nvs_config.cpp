@@ -41,9 +41,41 @@ void initConfig(const char* defaultDeviceId) {
 
 bool isProvisioned() {
     preferences.begin("relay-config", true);
-    bool ok = preferences.getBool("provisioned", false);
+    bool flag = preferences.getBool("provisioned", false);
+    String ssid = preferences.getString("wifi_ssid", "");
     preferences.end();
-    return ok;
+    return flag && ssid.length() > 0;
+}
+
+bool hasValidWifiCredentials() {
+    return config.wifi_ssid.length() > 0;
+}
+
+bool hasValidBrokerCredentials() {
+    return config.mqtt_broker.length() > 0 &&
+           config.mqtt_broker != "tu-broker.hivemq.cloud" &&
+           config.mqtt_broker != "127.0.0.1" &&
+           config.mqtt_user.length() > 0 &&
+           config.mqtt_user != "iotk_REEMPLAZAR";
+}
+
+const char* resolveDeviceConfigState(bool wifiConnected, bool mqttConnected) {
+    if (!hasValidWifiCredentials()) {
+        return "unconfigured";
+    }
+    if (!hasValidBrokerCredentials()) {
+        return wifiConnected ? "wifi_connected" : "incomplete";
+    }
+    if (wifiConnected && mqttConnected) {
+        return "online";
+    }
+    if (wifiConnected) {
+        return "wifi_connected";
+    }
+    if (config.last_wifi_error.length() > 0) {
+        return "connection_failed";
+    }
+    return "configured_disconnected";
 }
 
 void loadConfig() {
@@ -63,6 +95,7 @@ void loadConfig() {
     config.pulse_enabled    = preferences.getBool("pulse_en", false);
     config.pulse_width_ms   = preferences.getUInt("pulse_w", 500);
     config.sled_online      = preferences.getBool("sled_on", true);
+    config.last_wifi_error  = preferences.getString("wifi_err", "");
     preferences.end();
 
     if (config.device_key.length() == 0) {
@@ -90,8 +123,21 @@ void saveConfig() {
     preferences.putBool("pulse_en",      config.pulse_enabled);
     preferences.putUInt("pulse_w",       config.pulse_width_ms);
     preferences.putBool("sled_on",       config.sled_online);
+    preferences.putString("wifi_err",    config.last_wifi_error);
     preferences.putBool("provisioned",   config.wifi_ssid.length() > 0);
     preferences.end();
+}
+
+bool saveLastWifiErrorNvs(const char* err) {
+    String nextErr = err ? String(err) : String("");
+    if (config.last_wifi_error == nextErr) {
+        return true;
+    }
+    config.last_wifi_error = nextErr;
+    if (!preferences.begin("relay-config", false)) return false;
+    preferences.putString("wifi_err", config.last_wifi_error);
+    preferences.end();
+    return true;
 }
 
 void resetConfig() {

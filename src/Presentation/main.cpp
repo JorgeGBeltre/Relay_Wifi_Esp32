@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <WiFi.h>
 #include "Infrastructure/Config/config.h"
 #include "Infrastructure/Config/NvsConfigRepository.h"
 
@@ -49,33 +50,77 @@ static app::TimerSchedulerService*   g_timerScheduler = nullptr;
 static app::RelayFirmwareController* g_controller = nullptr;
 static infra::LanZeroconfServer*     g_lanServer = nullptr;
 
+static std::string g_activeDeviceId;
+
+static void reloadRuntimeConnectivity() {
+    domain::DeviceConfig updatedCfg;
+    g_configRepo.load(updatedCfg);
+
+    std::string prevSsid;
+    // Si cambió el SSID respecto a la red actualmente asociada, reconectar Wi-Fi
+    if (!updatedCfg.wifiSsid.empty() &&
+        WiFi.status() == WL_CONNECTED &&
+        std::string(WiFi.SSID().c_str()) != updatedCfg.wifiSsid) {
+        WiFi.disconnect(false, false);
+        delay(80);
+    }
+
+    g_wifi.setCredentials(updatedCfg.wifiSsid, updatedCfg.wifiPass);
+    if (WiFi.status() != WL_CONNECTED && !updatedCfg.wifiSsid.empty()) {
+        g_wifi.connect();
+    }
+
+    const char* broker = !updatedCfg.mqttBroker.empty() ? updatedCfg.mqttBroker.c_str() : MQTT_SERVER;
+    int port = updatedCfg.mqttPort > 0 ? updatedCfg.mqttPort : MQTT_PORT;
+    const char* apiKey = !updatedCfg.mqttUser.empty() ? updatedCfg.mqttUser.c_str() : API_KEY;
+    const char* devId = !g_activeDeviceId.empty()
+        ? g_activeDeviceId.c_str()
+        : (!updatedCfg.deviceId.empty() ? updatedCfg.deviceId.c_str() : "RELAY");
+
+    infra::disconnectMQTT();
+    infra::initMQTT(broker, port, devId, apiKey, root_ca_pem, FIRMWARE_VERSION);
+    if (WiFi.status() == WL_CONNECTED && hasValidBrokerCredentials()) {
+        infra::connectMQTT();
+    }
+}
+
 // Ejecuta el flujo de emparejamiento de 2 etapas:
-// - Etapa 1 (1ª pulsación larga de 5s o primer arranque): Quick Pairing (BLE GATT + SmartConfig ESP-Touch)
-// - Etapa 2 (2ª pulsación larga de 5s estando en Quick Pairing, o fallback): SoftAP VESIS-<ChipID>
+// - Dispositivo sin credenciales (fábrica): permanece continuamente descubrible en Quick Pairing
+//   (BLE GATT + SmartConfig ESP-Touch) hasta recibir configuración, permitiendo conmutar a SoftAP con 5s de botón.
+// - Dispositivo ya configurado (pulsación larga de 5s en operación): ventana interactiva de recuperación/reconfiguración.
 static void runPairingWorkflow(bool isInitialUnprovisionedBoot) {
-    Serial.println("[PAIRING] Entrando en Etapa 1: Quick Pairing (BLE + SmartConfig)...");
-    QuickPairingResult res = g_blePortal.runInteractive(
-        isInitialUnprovisionedBoot ? 60000UL : 180000UL,
-        g_indicator,
-        g_button1
-    );
+    do {
+        Serial.println("[PAIRING] Entrando en Etapa 1: Quick Pairing (BLE + SmartConfig)...");
+        QuickPairingResult res = g_blePortal.runInteractive(
+            180000UL,
+            g_indicator,
+            g_button1
+        );
 
-    if (res == QuickPairingResult::Provisioned) {
-        Serial.println("[PAIRING] Credenciales recibidas en Quick Pairing. Reiniciando...");
-        delay(400);
-        ESP.restart();
-        return;
-    }
+        if (res == QuickPairingResult::Provisioned) {
+            Serial.println("[PAIRING] Credenciales recibidas y verificadas en Quick Pairing.");
+            if (!isInitialUnprovisionedBoot) {
+                reloadRuntimeConnectivity();
+            }
+            return;
+        }
 
-    if (res == QuickPairingResult::CancelledByButton) {
-        Serial.println("[PAIRING] Emparejamiento cancelado por pulsación corta. Retomando operación normal.");
-        return;
-    }
+        if (res == QuickPairingResult::CancelledByButton && !isInitialUnprovisionedBoot) {
+            Serial.println("[PAIRING] Emparejamiento cancelado por pulsación corta. Retomando operación normal.");
+            return;
+        }
 
-    if (res == QuickPairingResult::SwitchToSoftAp || isInitialUnprovisionedBoot) {
-        Serial.println("[PAIRING] Entrando en Etapa 2: Compatible SoftAP (VESIS-<ChipID>)...");
-        infra::WifiApProvisioningPortal::startPortal(180, &g_indicator, &g_button1);
-    }
+        if (res == QuickPairingResult::SwitchToSoftAp) {
+            Serial.println("[PAIRING] Entrando en Etapa 2: Compatible SoftAP (VESIS-<ChipID>)...");
+            bool savedViaAp = infra::WifiApProvisioningPortal::startPortal(180, &g_indicator, &g_button1);
+            if (savedViaAp) {
+                if (!isInitialUnprovisionedBoot) {
+                    reloadRuntimeConnectivity();
+                }
+                return;
+            }
+        }
+    } while (isInitialUnprovisionedBoot && !g_configRepo.isProvisioned());
 }
 
 void setup() {
@@ -89,6 +134,7 @@ void setup() {
     bool isProv = g_configRepo.load(devConfig);
 
     std::string activeDeviceId = !devConfig.deviceId.empty() ? devConfig.deviceId : identity.chipId;
+    g_activeDeviceId = activeDeviceId;
     std::string deviceId1 = activeDeviceId + "-01";
 
     // 2. Restaurar estado del relé (< 20 ms, Offline-First) según StartupMode (Off, On, Stay) y pulso
@@ -152,6 +198,10 @@ void setup() {
     static infra::LanZeroconfServer lanServer{
         relayService, telemetry, timerScheduler, g_indicator,
         g_configRepo, activeDeviceId, deviceId1, LAN_HTTP_PORT};
+    lanServer.setCredentialsReloadCallback([]() {
+        Serial.println("[LAN] Credenciales actualizadas por /zeroconf -> recargando conectividad en caliente...");
+        reloadRuntimeConnectivity();
+    });
     g_lanServer = &lanServer;
 
     auto provisioningCallback = []() {
