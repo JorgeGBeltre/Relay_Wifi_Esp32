@@ -187,26 +187,6 @@ void RelayFirmwareController::tick() {
     return;
   }
 
-    // 7. Máquina de estados de conectividad Wi-Fi + MQTT 5.0 no bloqueante
-    if (state_ == State::Connecting) {
-        updateIndicatorForConnectivity();
-        if (lastConnectAttemptMs_ == 0 || (now - lastConnectAttemptMs_) >= RECONNECT_BACKOFF_MS) {
-            lastConnectAttemptMs_ = now;
-            if (connectivity_.ensureConnected()) {
-                state_ = State::Operational;
-                indicator_.show(domain::IndicatorStatus::Operational);
-                log_.info("[CTRL] Estado -> OPERATIONAL");
-            }
-        }
-    } else if (state_ == State::Operational) {
-        if (!connectivity_.isOnline()) {
-            log_.info("[CTRL] Enlace perdido; equipo vinculado a cuenta -> conservando credenciales y reintentando reconexión...");
-            updateIndicatorForConnectivity();
-            state_ = State::Connecting;
-            lastConnectAttemptMs_ = now;
-            return;
-        }
-
   // 7. Máquina de estados de conectividad Wi-Fi + MQTT 5.0 no bloqueante
   if (state_ == State::Connecting) {
     updateIndicatorForConnectivity();
@@ -221,6 +201,7 @@ void RelayFirmwareController::tick() {
     }
   } else if (state_ == State::Operational) {
     if (!connectivity_.isOnline()) {
+      log_.info("[CTRL] Enlace perdido; equipo vinculado a cuenta -> conservando credenciales y reintentando reconexión...");
       updateIndicatorForConnectivity();
       state_ = State::Connecting;
       lastConnectAttemptMs_ = now;

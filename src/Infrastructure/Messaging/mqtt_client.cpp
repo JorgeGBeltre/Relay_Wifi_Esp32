@@ -16,18 +16,24 @@ static std::function<void(const String&, const String&)> g_messageSink;
 static std::function<void()> g_onConnectCallback;
 static std::function<void(const String&)> g_onAuthRejectedUnlinkCallback;
 
-static void inspectReasonStringForAccountUnlink(MQTTReasonCode rc) {
+static void inspectReasonStringForAccountUnlink(MQTTReasonCode rc, const String& extraMsg = String()) {
     if (rc != NOT_AUTHORIZED || !g_onAuthRejectedUnlinkCallback) {
         return;
     }
-    String reasonStr = mqtt.lastReasonString();
-    if (!reasonStr.startsWith("ACCOUNT_UNLINKED:")) {
-        return;
-    }
-    String proof = reasonStr.substring(17);
-    proof.trim();
-    if (proof.length() == 32) {
-        g_onAuthRejectedUnlinkCallback(proof);
+    const char* marker = "ACCOUNT_UNLINKED:";
+    const size_t markerLen = 17;
+    String candidates[2] = {mqtt.lastReasonString(), extraMsg};
+    for (int i = 0; i < 2; ++i) {
+        int idx = candidates[i].indexOf(marker);
+        if (idx < 0) {
+            continue;
+        }
+        String tail = candidates[i].substring(idx + static_cast<int>(markerLen));
+        tail.trim();
+        if (tail.length() >= 32) {
+            g_onAuthRejectedUnlinkCallback(tail.substring(0, 32));
+            return;
+        }
     }
 }
 
@@ -94,7 +100,7 @@ void initMQTT(const char* server, uint16_t port,
 
     mqtt.onError([](MQTTReasonCode rc, const String& msg) {
         Serial.printf("[MQTT5] Error 0x%02X: %s\n", (uint8_t)rc, msg.c_str());
-        inspectReasonStringForAccountUnlink(rc);
+        inspectReasonStringForAccountUnlink(rc, msg);
     });
 
     mqtt.onMessage([](const MQTTMessage& msg) {
