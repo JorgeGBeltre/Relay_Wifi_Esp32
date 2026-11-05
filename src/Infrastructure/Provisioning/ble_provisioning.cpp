@@ -5,6 +5,7 @@
 #include <ArduinoJson.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include <cstring>
 #include <sstream>
 
 #define SERVICE_UUID          "12345678-1234-1234-1234-123456789abc"
@@ -38,13 +39,37 @@ static uint8_t computeAdvStateByte() {
     return 0x02; // configured_disconnected
 }
 
+static const char* computeRelayCredentialMode(bool wifiConn) {
+    if (wifiConn && !isAccountBound()) {
+        return "adopt_only";
+    }
+    return "wifi";
+}
+
+static uint8_t computeAdvProvFlags() {
+    const bool wifiConn = (WiFi.status() == WL_CONNECTED);
+    const uint8_t credBits = (wifiConn && !isAccountBound()) ? 0x02U : 0x00U; // 2=adopt_only, 0=wifi
+    uint8_t flags = credBits;
+    flags |= 0x10U; // bit 4: supports_wifi
+    if (isAccountBound()) {
+        flags |= 0x20U; // bit 5: account_bound
+    }
+    const uint8_t chBits = static_cast<uint8_t>(((RELAY_CHANNEL_COUNT > 0 ? (RELAY_CHANNEL_COUNT - 1) : 0) & 0x03) << 6);
+    flags |= chBits;
+    return flags;
+}
+
 static void buildBleStateJson(String& out) {
     const bool wifiConn = (WiFi.status() == WL_CONNECTED);
     const bool hasWifi = hasValidWifiCredentials();
     const bool hasBroker = hasValidBrokerCredentials();
     const char* cfgState = resolveDeviceConfigState(wifiConn, false);
+    const char* credMode = computeRelayCredentialMode(wifiConn);
+    const bool adoptReady = (std::strcmp(credMode, "adopt_only") == 0);
 
-    StaticJsonDocument<640> idDoc;
+    StaticJsonDocument<768> idDoc;
+    idDoc["device_family"]          = "relay_wifi";
+    idDoc["device_code"]            = 1;
     idDoc["device_type"]            = "Relay-Wifi";
     idDoc["model"]                  = RELAY_MODEL_NAME;
     idDoc["channel_count"]          = RELAY_CHANNEL_COUNT;
@@ -54,6 +79,14 @@ static void buildBleStateJson(String& out) {
     idDoc["mac"]                    = WiFi.macAddress();
     idDoc["version"]                = FIRMWARE_VERSION;
     idDoc["config_state"]           = cfgState;
+    idDoc["credential_mode"]        = credMode;
+    idDoc["requires_wifi"]          = !adoptReady;
+    idDoc["requires_apn"]           = false;
+    idDoc["supports_wifi"]          = true;
+    idDoc["supports_apn"]           = false;
+    idDoc["apn_auto_detected"]      = false;
+    idDoc["cellular_connected"]     = false;
+    idDoc["adopt_ready"]            = adoptReady;
     idDoc["status"]                 = hasWifi ? "configured" : "ready_to_claim";
     idDoc["provisioning_mode"]      = true;
     idDoc["factory_mode"]           = !hasWifi;
@@ -111,12 +144,16 @@ static bool parseJsonCredentials(const std::string& raw) {
         return false;
     }
 
-    if (doc.containsKey("wifi_ssid")) config.wifi_ssid = doc["wifi_ssid"].as<String>();
-    else if (doc.containsKey("ssid")) config.wifi_ssid = doc["ssid"].as<String>();
-
-    if (doc.containsKey("wifi_pass")) config.wifi_pass = doc["wifi_pass"].as<String>();
-    else if (doc.containsKey("pass")) config.wifi_pass = doc["pass"].as<String>();
-    else if (doc.containsKey("password")) config.wifi_pass = doc["password"].as<String>();
+    String incomingSsid = "";
+    if (doc.containsKey("wifi_ssid")) incomingSsid = doc["wifi_ssid"].as<String>();
+    else if (doc.containsKey("ssid")) incomingSsid = doc["ssid"].as<String>();
+    incomingSsid.trim();
+    if (incomingSsid.length() > 0) {
+        config.wifi_ssid = incomingSsid;
+        if (doc.containsKey("wifi_pass")) config.wifi_pass = doc["wifi_pass"].as<String>();
+        else if (doc.containsKey("pass")) config.wifi_pass = doc["pass"].as<String>();
+        else if (doc.containsKey("password")) config.wifi_pass = doc["password"].as<String>();
+    }
 
     if (doc.containsKey("mqtt_broker")) config.mqtt_broker = doc["mqtt_broker"].as<String>();
     else if (doc.containsKey("broker")) config.mqtt_broker = doc["broker"].as<String>();
@@ -413,18 +450,22 @@ static void broadcastSmartConfigIdentityAck(const String& deviceId) {
     );
     IPAddress globalBroadcast(255, 255, 255, 255);
 
-    StaticJsonDocument<320> doc;
+    StaticJsonDocument<384> doc;
     doc["ack"]              = "smartconfig_connected";
+    doc["device_family"]    = "relay_wifi";
+    doc["device_code"]      = 1;
     doc["device_id"]        = deviceId;
     doc["chip_id"]          = deviceId;
     doc["device_type"]      = "Relay-Wifi";
     doc["model"]            = RELAY_MODEL_NAME;
     doc["channel_count"]    = RELAY_CHANNEL_COUNT;
+    doc["credential_mode"]  = computeRelayCredentialMode(true);
+    doc["adopt_ready"]      = !isAccountBound();
     doc["ip"]               = localIp.toString();
     doc["port"]             = 8081;
     doc["config_state"]     = resolveDeviceConfigState(true, false);
 
-    char payload[320] = {0};
+    char payload[384] = {0};
     size_t len = serializeJson(doc, payload, sizeof(payload));
 
     for (int i = 0; i < 6; ++i) {
@@ -592,17 +633,21 @@ QuickPairingResult runQuickPairing(unsigned long timeoutMs,
     adv->addServiceUUID(SERVICE_UUID);
     adv->setScanResponse(true);
     adv->setName(advName.c_str());
+    const uint8_t advState = computeAdvStateByte();
+    const uint8_t advFlags = computeAdvProvFlags();
     std::string mfgData;
     mfgData.push_back((char)0xFF);
     mfgData.push_back((char)0xFF);
     mfgData.push_back('V');
     mfgData.push_back('S');
-    mfgData.push_back((char)computeAdvStateByte());
+    mfgData.push_back((char)advState);
+    mfgData.push_back((char)0x01); // deviceCode: 0x01 = relay_wifi
+    mfgData.push_back((char)advFlags);
     adv->setManufacturerData(mfgData);
     adv->start();
 
-    Serial.printf("[BLE] Publicitando como '%s' (stateByte=0x%02X) + SmartConfig activo durante %lu ms\n",
-                  advName.c_str(), (unsigned)computeAdvStateByte(), timeoutMs);
+    Serial.printf("[BLE] Publicitando como '%s' (stateByte=0x%02X, devCode=0x01, flags=0x%02X) + SmartConfig activo durante %lu ms\n",
+                  advName.c_str(), (unsigned)advState, (unsigned)advFlags, timeoutMs);
 
     // Esperar a que el usuario suelte el botón de la 1ª pulsación larga antes de evaluar nuevos eventos
     if (button) {

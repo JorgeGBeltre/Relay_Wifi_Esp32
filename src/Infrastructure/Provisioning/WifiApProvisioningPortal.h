@@ -63,24 +63,36 @@ public:
             if (!wifiManager.server) return;
 
             auto handleDeviceInfo = [&]() {
-                StaticJsonDocument<512> doc;
+                StaticJsonDocument<640> doc;
                 const char* resolvedId = config.device_id.length() > 0 ? config.device_id.c_str() : chipHex;
                 const bool wifiConn = (WiFi.status() == WL_CONNECTED);
                 const bool hasWifi = hasValidWifiCredentials();
                 const bool hasBroker = hasValidBrokerCredentials();
                 const char* cfgState = resolveDeviceConfigState(wifiConn, false);
+                const bool adoptReady = hasWifi && !isAccountBound();
 
                 doc["deviceid"]               = resolvedId;
                 doc["device_id"]              = resolvedId;
                 doc["chipid"]                 = chipHex;
                 doc["chip_id"]                = chipHex;
-                doc["apikey"]                 = hasWifi ? config.device_key.c_str() : "00000000-0000-0000-0000-000000000000";
+                doc["apikey"]                 = config.device_key.c_str();
                 doc["devicekey"]              = config.device_key.c_str();
+                doc["device_key"]             = config.device_key.c_str();
+                doc["device_family"]          = "relay_wifi";
+                doc["device_code"]            = 1;
                 doc["device_type"]            = "Relay-Wifi";
                 doc["model"]                  = RELAY_MODEL_NAME;
                 doc["channel_count"]          = RELAY_CHANNEL_COUNT;
                 doc["version"]                = FIRMWARE_VERSION;
                 doc["config_state"]           = cfgState;
+                doc["credential_mode"]        = adoptReady ? "adopt_only" : "wifi";
+                doc["requires_wifi"]          = !adoptReady;
+                doc["requires_apn"]           = false;
+                doc["supports_wifi"]          = true;
+                doc["supports_apn"]           = false;
+                doc["apn_auto_detected"]      = false;
+                doc["cellular_connected"]     = false;
+                doc["adopt_ready"]            = adoptReady;
                 doc["provisioning_mode"]      = true;
                 doc["factory_mode"]           = !hasWifi;
                 doc["has_wifi_credentials"]   = hasWifi;
@@ -105,25 +117,32 @@ public:
             auto handleApPost = [&]() {
                 String body = wifiManager.server->arg("plain");
                 StaticJsonDocument<1024> doc;
-                if (deserializeJson(doc, body) != DeserializationError::Ok ||
-                    (!doc.containsKey("ssid") && !doc.containsKey("wifi_ssid"))) {
+                if (deserializeJson(doc, body) != DeserializationError::Ok) {
                     wifiManager.server->sendHeader("Connection", "close");
                     wifiManager.server->send(400, "application/json", "{\"error\":400,\"reason\":\"invalid_payload\"}");
                     return;
                 }
 
-                String nextSsid = doc.containsKey("ssid") ? doc["ssid"].as<String>() : doc["wifi_ssid"].as<String>();
-                if (nextSsid.length() == 0 || nextSsid.length() > 32) {
+                String nextSsid = "";
+                if (doc.containsKey("ssid")) nextSsid = doc["ssid"].as<String>();
+                else if (doc.containsKey("wifi_ssid")) nextSsid = doc["wifi_ssid"].as<String>();
+                nextSsid.trim();
+
+                const bool hasAdoptBroker =
+                    doc.containsKey("server") || doc.containsKey("mqtt_broker") || doc.containsKey("serverName");
+
+                if (nextSsid.length() > 32 || (nextSsid.length() == 0 && !(hasValidWifiCredentials() && hasAdoptBroker))) {
                     wifiManager.server->sendHeader("Connection", "close");
                     wifiManager.server->send(400, "application/json", "{\"error\":400,\"reason\":\"invalid_ssid\"}");
                     return;
                 }
-                config.wifi_ssid = nextSsid;
-
-                if (doc.containsKey("password")) config.wifi_pass = doc["password"].as<String>();
-                else if (doc.containsKey("pass")) config.wifi_pass = doc["pass"].as<String>();
-                else if (doc.containsKey("wifi_pass")) config.wifi_pass = doc["wifi_pass"].as<String>();
-                else config.wifi_pass = "";
+                if (nextSsid.length() > 0) {
+                    config.wifi_ssid = nextSsid;
+                    if (doc.containsKey("password")) config.wifi_pass = doc["password"].as<String>();
+                    else if (doc.containsKey("pass")) config.wifi_pass = doc["pass"].as<String>();
+                    else if (doc.containsKey("wifi_pass")) config.wifi_pass = doc["wifi_pass"].as<String>();
+                    else config.wifi_pass = "";
+                }
 
                 if (doc.containsKey("serverName")) config.mqtt_broker = doc["serverName"].as<String>();
                 else if (doc.containsKey("mqtt_broker")) config.mqtt_broker = doc["mqtt_broker"].as<String>();
