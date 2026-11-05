@@ -58,6 +58,7 @@ static void buildBleStateJson(String& out) {
     idDoc["factory_mode"]           = !hasWifi;
     idDoc["has_wifi_credentials"]   = hasWifi;
     idDoc["has_broker_credentials"] = hasBroker;
+    idDoc["account_bound"]          = isAccountBound();
     idDoc["wifi_connected"]         = wifiConn;
     idDoc["configured_ssid"]        = config.wifi_ssid;
     idDoc["wifi_ssid"]              = config.wifi_ssid;

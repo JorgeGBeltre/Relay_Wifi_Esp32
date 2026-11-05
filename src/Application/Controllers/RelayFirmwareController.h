@@ -31,6 +31,7 @@ public:
     using ApTriggerCallback = std::function<void()>;
     using StateChangedNotifyCallback = std::function<void()>;
     using WifiChangeRequestCallback = std::function<void(const std::string& ssid, const std::string& password, const std::string& requestId)>;
+    using AccountUnlinkRequestCallback = std::function<void(const std::string& source, const std::string& unlinkProof, const std::string& requestId)>;
 
     RelayFirmwareController(RelayService& relays,
                             ConnectivityService& connectivity,
@@ -49,6 +50,7 @@ public:
     void registerButton(domain::IButtonHandler& button, const std::string& targetDeviceId);
     void setOnLocalStateChangeCallback(StateChangedNotifyCallback cb) { onStateChangeCb_ = std::move(cb); }
     void setOnWifiChangeRequestCallback(WifiChangeRequestCallback cb) { onWifiChangeRequestCb_ = std::move(cb); }
+    void setOnAccountUnlinkRequestCallback(AccountUnlinkRequestCallback cb) { onAccountUnlinkCb_ = std::move(cb); }
 
     void setup(bool relaysAlreadyInitialized = false);
     void tick();
@@ -84,6 +86,7 @@ private:
     void processCommand(const std::string& command);
     void handleTimersPayload(const std::string& payload);
     void handleWifiPayload(const std::string& payload);
+    void handleUnlinkPayload(const std::string& payload);
     void updateIndicatorForConnectivity();
 
     RelayService&                  relays_;
@@ -101,6 +104,7 @@ private:
     domain::IConfigRepository*     configRepo_ = nullptr;
     StateChangedNotifyCallback     onStateChangeCb_;
     WifiChangeRequestCallback      onWifiChangeRequestCb_;
+    AccountUnlinkRequestCallback   onAccountUnlinkCb_;
 
     std::vector<ButtonBinding>     buttons_;
     State                          state_ = State::Connecting;

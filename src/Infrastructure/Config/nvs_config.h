@@ -23,6 +23,7 @@ struct AppConfig {
     bool     pulse_enabled    = false; // Modo pulso (Inching)
     uint32_t pulse_width_ms   = 500;   // Ancho de pulso en ms (500..36000000, paso 500)
     bool     sled_online      = true;  // Indicador LED de estado en línea (sledOnline)
+    bool     account_bound    = false; // true cuando el equipo está vinculado a una cuenta de la plataforma
     String   last_wifi_error;          // Último motivo verificable de fallo Wi-Fi (auth_failed, ap_not_found, etc.)
 };
 
@@ -30,9 +31,12 @@ extern AppConfig config;
 
 void initConfig(const char* defaultDeviceId = nullptr);
 bool isProvisioned();
+bool isAccountBound();
 bool hasValidWifiCredentials();
 bool hasValidBrokerCredentials();
 const char* resolveDeviceConfigState(bool wifiConnected, bool mqttConnected);
+void computeUnlinkProofHex(const char* deviceKey, const char* chipId, char outHex[33]);
+bool verifyUnlinkProof(const char* deviceKey, const char* chipId, const char* providedHex);
 void saveConfig();
 void loadConfig();
 void resetConfig();

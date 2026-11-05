@@ -59,6 +59,7 @@ struct DeviceConfig {
     bool        sledOnline     = true;
 
     bool        provisioned    = false;
+    bool        accountBound   = false;
 };
 
 } // namespace relay::domain

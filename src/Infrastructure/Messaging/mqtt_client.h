@@ -22,5 +22,6 @@ bool subscribeMQTT(const String& topic, uint8_t qos = 1);
 
 void setMqttMessageSink(std::function<void(const String& topic, const String& payload)> sink);
 void setMqttConnectCallback(std::function<void()> cb);
+void setMqttAuthRejectedUnlinkCallback(std::function<void(const String& unlinkProof)> cb);
 
 }

@@ -53,6 +53,7 @@ std::string ArduinoJsonPayloadSerializer::formatStatus(
     details["pulse"] = config.pulse_enabled ? "on" : "off";
     details["pulseWidth"] = config.pulse_width_ms;
     details["sledOnline"] = config.sled_online ? "on" : "off";
+    details["account_bound"] = isAccountBound();
 
     JsonObject devicesObj = details.createNestedObject("devices");
     JsonArray switchesArr = details.createNestedArray("switches");

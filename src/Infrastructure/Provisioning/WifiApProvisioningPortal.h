@@ -85,6 +85,7 @@ public:
                 doc["factory_mode"]           = !hasWifi;
                 doc["has_wifi_credentials"]   = hasWifi;
                 doc["has_broker_credentials"] = hasBroker;
+                doc["account_bound"]          = isAccountBound();
                 doc["wifi_connected"]         = wifiConn;
                 doc["configured_ssid"]        = config.wifi_ssid;
                 doc["last_wifi_error"]        = config.last_wifi_error;

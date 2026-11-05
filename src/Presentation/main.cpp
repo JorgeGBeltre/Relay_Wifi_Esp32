@@ -79,7 +79,53 @@ struct PendingWifiAdoption {
     unsigned long executeAfterMs = 0;
 };
 
+struct PendingFactoryUnlink {
+    bool pending = false;
+    std::string reason;
+    unsigned long executeAfterMs = 0;
+};
+
 static PendingWifiAdoption g_pendingWifiAdoption;
+static PendingFactoryUnlink g_pendingFactoryUnlink;
+
+static void scheduleFactoryUnlink(const std::string& reason, unsigned long delayMs = 200UL) {
+    if (g_pendingFactoryUnlink.pending) {
+        return;
+    }
+    g_pendingFactoryUnlink.pending = true;
+    g_pendingFactoryUnlink.reason = reason;
+    g_pendingFactoryUnlink.executeAfterMs = millis() + delayMs;
+    Serial.printf("[UNLINK] Desvinculación de cuenta verificada (%s). Restauración a Quick Pairing programada en %lu ms...\n",
+                  reason.c_str(), delayMs);
+}
+
+static void executeFactoryUnlinkToQuickPairing(const std::string& reason) {
+    Serial.printf("[UNLINK] Ejecutando desvinculación de fábrica (%s): apagando relés, borrando credenciales y entrando en Quick Pairing...\n",
+                  reason.c_str());
+
+    if (g_relayService) {
+        const unsigned long now = millis();
+        for (const auto& r : g_relayService->getAllStates()) {
+            g_relayService->setDesiredState(r.deviceId, false);
+            g_relayService->applyDesiredState(r.deviceId, now, "ACCOUNT_UNLINK");
+        }
+    }
+    g_rtcRelayMagic = 0U;
+    g_rtcRelayMask = 0U;
+
+    if (g_lanServer) {
+        g_lanServer->loop(false);
+    }
+    infra::disconnectMQTT();
+
+    g_configRepo.erase();
+
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect(true, true);
+    delay(150);
+
+    ESP.restart();
+}
 
 static void executeHotWifiAdoption(const std::string& targetSsid,
                                    const std::string& targetPass,
@@ -314,6 +360,9 @@ void setup() {
                   devConfig.pulseEnabled ? "on" : "off",
                   devConfig.pulseWidthMs,
                   devConfig.sledOnline ? "on" : "off");
+    Serial.printf("[INIT] AccountBound:  %s (NVS=%s)\n",
+                  isAccountBound() ? "true" : "false",
+                  isProv ? "provisioned" : "unconfigured");
 
     // 3. Si no está aprovisionado en el primer arranque, iniciar flujo de emparejamiento
     if (!isProv) {
@@ -333,6 +382,13 @@ void setup() {
 
     infra::initMQTT(broker, port, activeDeviceId.c_str(),
                     apiKey, root_ca_pem, FIRMWARE_VERSION);
+    infra::setMqttAuthRejectedUnlinkCallback([](const String& proof) {
+        if (verifyUnlinkProof(config.device_key.c_str(), g_activeDeviceId.c_str(), proof.c_str())) {
+            scheduleFactoryUnlink("OFFLINE_TOMBSTONE_CONNACK", 120UL);
+        } else {
+            Serial.println("[UNLINK] CONNACK ACCOUNT_UNLINKED ignorado: unlink_proof inválido.");
+        }
+    });
 
     static app::ConnectivityService connectivity{g_wifi, g_transport, g_logger};
     g_connectivity = &connectivity;
@@ -352,6 +408,9 @@ void setup() {
     lanServer.setCredentialsReloadCallback([]() {
         Serial.println("[LAN] Credenciales actualizadas por /zeroconf -> recargando conectividad en caliente...");
         reloadRuntimeConnectivity();
+    });
+    lanServer.setUnlinkRequestCallback([](const std::string& reason) {
+        scheduleFactoryUnlink(reason, 200UL);
     });
     g_lanServer = &lanServer;
 
@@ -391,6 +450,14 @@ void setup() {
             g_pendingWifiAdoption.requestId = requestId;
             g_pendingWifiAdoption.executeAfterMs = millis() + 250UL;
         });
+    controller.setOnAccountUnlinkRequestCallback(
+        [](const std::string& source, const std::string& unlinkProof, const std::string&) {
+            if (verifyUnlinkProof(config.device_key.c_str(), g_activeDeviceId.c_str(), unlinkProof.c_str())) {
+                scheduleFactoryUnlink(source, 200UL);
+            } else {
+                Serial.println("[UNLINK] Solicitud MQTT de desvinculación rechazada: unlink_proof inválido.");
+            }
+        });
 
     controller.setup(true);
     g_controller = &controller;
@@ -406,6 +473,13 @@ void loop() {
     }
     if (g_lanServer) {
         g_lanServer->loop(g_wifi.isConnected());
+    }
+    if (g_pendingFactoryUnlink.pending &&
+        static_cast<long>(millis() - g_pendingFactoryUnlink.executeAfterMs) >= 0) {
+        const std::string reason = g_pendingFactoryUnlink.reason;
+        g_pendingFactoryUnlink = PendingFactoryUnlink{};
+        executeFactoryUnlinkToQuickPairing(reason);
+        return;
     }
     if (g_pendingWifiAdoption.pending &&
         static_cast<long>(millis() - g_pendingWifiAdoption.executeAfterMs) >= 0) {

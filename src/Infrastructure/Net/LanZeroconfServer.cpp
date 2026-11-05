@@ -94,6 +94,7 @@ void LanZeroconfServer::startServer() {
   registerEndpoint("/zeroconf/wifi");
   registerEndpoint("/zeroconf/config");
   registerEndpoint("/zeroconf/timers");
+  registerEndpoint("/zeroconf/unlink");
   registerEndpoint("/zeroconf/ota_unlock");
 
   server_.on("/zeroconf/info", HTTP_GET, [this]() {
@@ -172,6 +173,7 @@ void LanZeroconfServer::handleUdpDiscovery() {
   doc["factory_mode"] = !hasValidWifiCredentials();
   doc["has_wifi_credentials"] = hasValidWifiCredentials();
   doc["has_broker_credentials"] = hasValidBrokerCredentials();
+  doc["account_bound"] = isAccountBound();
   doc["wifi_connected"] = wifiConn;
   doc["mqtt_connected"] = mqttConn;
   doc["configured_ssid"] = config.wifi_ssid;
@@ -504,6 +506,7 @@ void LanZeroconfServer::dispatchZeroconf(const char *uri, const String &rawBody,
     d["config_state"] = cfgState;
     d["has_wifi_credentials"] = hasValidWifiCredentials();
     d["has_broker_credentials"] = hasValidBrokerCredentials();
+    d["account_bound"] = isAccountBound();
     d["wifi_connected"] = wifiConn;
     d["mqtt_connected"] = mqttConn;
     d["ssid"] = liveSsid;
@@ -586,6 +589,24 @@ void LanZeroconfServer::dispatchZeroconf(const char *uri, const String &rawBody,
           timerScheduler_);
     }
     writeError(0);
+    return;
+  }
+
+  if (std::strcmp(uri, "/zeroconf/unlink") == 0) {
+    const char *proof = dataObj["unlink_proof"] | (dataObj["unlinkProof"] | "");
+    if (deviceKeyStr.empty() ||
+        !verifyUnlinkProof(deviceKeyStr.c_str(), activeDeviceId_.c_str(), proof)) {
+      writeError(403);
+      return;
+    }
+    ++sequence_;
+    std::snprintf(
+        respBuf, respBufSize,
+        "{\"sequence\":\"%u\",\"seq\":%u,\"state_version\":%u,\"error\":0,\"data\":{\"status\":\"UNLINKING\",\"account_bound\":false}}",
+        sequence_, sequence_, relays_.getStateVersion());
+    if (onUnlinkRequest_) {
+      onUnlinkRequest_("LAN_UNLINK");
+    }
     return;
   }
 

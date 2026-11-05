@@ -14,6 +14,22 @@ static String g_firmwareVersion;
 
 static std::function<void(const String&, const String&)> g_messageSink;
 static std::function<void()> g_onConnectCallback;
+static std::function<void(const String&)> g_onAuthRejectedUnlinkCallback;
+
+static void inspectReasonStringForAccountUnlink(MQTTReasonCode rc) {
+    if (rc != NOT_AUTHORIZED || !g_onAuthRejectedUnlinkCallback) {
+        return;
+    }
+    String reasonStr = mqtt.lastReasonString();
+    if (!reasonStr.startsWith("ACCOUNT_UNLINKED:")) {
+        return;
+    }
+    String proof = reasonStr.substring(17);
+    proof.trim();
+    if (proof.length() == 32) {
+        g_onAuthRejectedUnlinkCallback(proof);
+    }
+}
 
 void setMqttMessageSink(std::function<void(const String&, const String&)> sink) {
     g_messageSink = std::move(sink);
@@ -21,6 +37,10 @@ void setMqttMessageSink(std::function<void(const String&, const String&)> sink) 
 
 void setMqttConnectCallback(std::function<void()> cb) {
     g_onConnectCallback = std::move(cb);
+}
+
+void setMqttAuthRejectedUnlinkCallback(std::function<void(const String& unlinkProof)> cb) {
+    g_onAuthRejectedUnlinkCallback = std::move(cb);
 }
 
 void initMQTT(const char* server, uint16_t port,
@@ -69,10 +89,12 @@ void initMQTT(const char* server, uint16_t port,
 
     mqtt.onDisconnect([](MQTTReasonCode rc) {
         Serial.printf("[MQTT5] Desconectado (Código: 0x%02X)\n", (uint8_t)rc);
+        inspectReasonStringForAccountUnlink(rc);
     });
 
     mqtt.onError([](MQTTReasonCode rc, const String& msg) {
         Serial.printf("[MQTT5] Error 0x%02X: %s\n", (uint8_t)rc, msg.c_str());
+        inspectReasonStringForAccountUnlink(rc);
     });
 
     mqtt.onMessage([](const MQTTMessage& msg) {

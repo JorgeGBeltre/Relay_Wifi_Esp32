@@ -15,6 +15,7 @@ struct MqttTopics {
     std::string commandsAck;
     std::string timersCommand;
     std::string wifiCommand;
+    std::string unlinkCommand;
     std::string switchSet;
     std::string switchCommand;
     std::string switchState;
@@ -32,6 +33,7 @@ struct MqttTopics {
         t.commandsAck   = t.devicePrefix + "/commands/ack";
         t.timersCommand = t.devicePrefix + "/timers/command";
         t.wifiCommand   = t.devicePrefix + "/wifi/command";
+        t.unlinkCommand = t.devicePrefix + "/unlink/command";
         t.switchSet     = t.devicePrefix + "/" + baseSwitch + "/state";
         t.switchCommand = t.devicePrefix + "/" + baseSwitch + "/command";
         t.switchState   = t.devicePrefix + "/" + baseSwitch + "_state";

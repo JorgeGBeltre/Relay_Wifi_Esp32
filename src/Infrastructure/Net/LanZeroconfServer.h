@@ -34,6 +34,9 @@ public:
     void setCredentialsReloadCallback(std::function<void()> cb) {
         onCredentialsReload_ = std::move(cb);
     }
+    void setUnlinkRequestCallback(std::function<void(const std::string& reason)> cb) {
+        onUnlinkRequest_ = std::move(cb);
+    }
 
 private:
     void startServer();
@@ -54,6 +57,7 @@ private:
     WebServer server_;
     WiFiUDP udp_;
     std::function<void()> onCredentialsReload_;
+    std::function<void(const std::string& reason)> onUnlinkRequest_;
     bool running_ = false;
     bool udpRunning_ = false;
     bool otaUnlocked_ = false;
