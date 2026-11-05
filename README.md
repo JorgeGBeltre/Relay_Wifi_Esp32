@@ -67,10 +67,15 @@ The system natively integrates **[ESP32_MQTTv5](https://github.com/JorgeGBeltre/
 | **Secure OTA Updates** | Powered by `MQTTOTAv5` — chunked binary transfers over MQTT 5.0, SHA-256 hash checks, automatic rollback protection, and non-blocking restarts |
 | **Quick Pairing (BLE + SmartConfig)** | Powered by `NimBLE-Arduino` + `ESP-Touch / AirKiss` (`runQuickPairing`) — simultaneous BLE GATT (`RELAY-<DeviceID>`) and Wi-Fi SmartConfig onboarding via mobile app frames or individual GATT characteristics, with hardware self-identification (`Device ID` + factory `Device Key`) and account claim tokens (`Bind Token`) |
 | **2-Stage Pairing & SoftAP `VESIS-<ChipID>`** | Stage 1 launches Quick Pairing (`runPairingWorkflow`) on a `5 s` long press; a 2nd `5 s` long press (or initial boot timeout) transitions to the `VESIS-<ChipID>` SoftAP captive portal (`WifiApProvisioningPortal::startPortal`), while a short press exits pairing mode |
-| **Power-On State (`StartupMode`) & Deferred Save** | Immediate `< 20 ms` Offline-First boot restoration (`initWithStartupConfig`) supporting `Off`, `On`, and `Stay` modes (`setStartupMode`), with `150 ms` deferred NVS writes (`flushDeferredSave`) to protect Flash memory |
+| **Power-On State (`StartupMode`) & Deferred Save** | Immediate `< 20 ms` Offline-First boot restoration (`initWithStartupConfig`) distinguishing true hardware power-on resets (`ESP_RST_POWERON` / `ESP_RST_BROWNOUT` / `ESP_RST_EXT`) from software resets (`RTC_NOINIT` state mask), supporting `Off`, `On`, and `Stay` modes (`setStartupMode`) with `150 ms` deferred NVS writes (`flushDeferredSave`) |
+| **Multi-Channel Relay Support (`1..4` Channels)** | Configurable `RELAY_CHANNEL_COUNT` (`1..4`, model `Relay-Wifi` .. `Relay-Wifi-4CH`) with per-channel physical buttons, `switch<N>:on\|off\|toggle`, `all:on\|off`, and multi-outlet LAN `/zeroconf/switches` |
+| **Deterministic Desired vs Reported State** | Monotonic `sequence` & `state_version` ordering, 16-entry `commandId` idempotency ring buffer, physical GPIO readback verification, and correlated ACKs (`APPLIED` / `STALE_REJECTED`) on `devices/<ChipID>/commands/ack` |
+| **Device Family ID & Dynamic `credential_mode`** | 7-byte BLE Manufacturer Data (`0xFFFF` `'V','S'`, `device_code = 0x01`) + JSON metadata exposing `device_family: "relay_wifi"` and `credential_mode` (`"wifi"` or `"adopt_only"` when Wi-Fi is already active while unbound) |
+| **Account-Binding & Cryptographic Unlink** | Explicit `account_bound` NVS flag (`acct_bound`) isolating temporary Wi-Fi/broker outages from authoritative platform unlinking (`devices/<ChipID>/unlink/command`, `CONNACK 0x87` `ACCOUNT_UNLINKED:<proof>`, and `/zeroconf/unlink` verified via constant-time `SHA-256`) |
+| **Guarded Remote Wi-Fi Adoption** | Hot Wi-Fi credential switch over MQTT 5.0 (`devices/<ChipID>/wifi/command`) with 15-second association verification and automatic rollback to the previous SSID/passphrase on failure |
 | **Inching / Pulse Mode** | Configurable auto-shutoff timer (`configurePulse`, `updatePulseTimer`) from `500 ms` to `36,000,000 ms` in `500 ms` steps |
-| **Scheduled Timers (`TimerSchedulerService`)** | Up to `8` persistent NVS timers (`Once`, `Repeat`, `Duration`) evaluated once per second against UTC epoch time (`evaluate`, `upsertTimer`, `clearAllTimers`, `loadFromStorage`) |
-| **Local LAN HTTP & AES-128-CBC (`LanZeroconfServer`)** | Local HTTP server on port `8081` (`/zeroconf/*`) + mDNS discovery (`notifyMdnsStateChange`) supporting plain JSON and `AES-128-CBC` (`PKCS#7`, `MD5(deviceKey)`) encrypted payloads via `CryptoUtils` |
+| **Scheduled Timers (`TimerSchedulerService`)** | Up to `8` persistent NVS timers (`Once`, `Repeat`, `Duration`, schema `tmr_ver = 2` with per-channel or all-channel targeting) synced over MQTT 5.0 (`devices/<ChipID>/timers/command`) and LAN `/zeroconf/timers` without actuating relays on timer deletion |
+| **Local LAN HTTP & AES-128-CBC (`LanZeroconfServer`)** | Local HTTP server on port `8081` (`/zeroconf/*`) + `_iot._tcp` mDNS (`iot_<ChipID>.local`) + UDP `:48899` discovery (`IOT_DISCOVER`) supporting plain JSON and `AES-128-CBC` (`PKCS#7`, `MD5(deviceKey)`) encrypted payloads via `CryptoUtils` |
 | **Dual Control Flow** | Physical button support (`25 ms` sample ticks, `50 ms` press/release debounce, immediate `5,000 ms` long-press detection while held) and remote MQTT 5.0 / LAN actuation |
 | **NVS Persistent Storage** | Dynamic credentials, `StartupMode`, pulse settings, `sledOnline`, and scheduled timers persisted non-volatilely via `Preferences` in the `relay-config` namespace |
 | **Non-blocking Multi-Pattern LED (`GpioIndicator`)** | `100 ms` base-tick LED pattern state machine (`Disconnected`, `Connecting`, `QuickPairing`, `CompatibleAp`, `OtaProgress`, `Operational`) with persistent `sledOnline` (`setSledOnline`) configuration |
@@ -225,12 +230,14 @@ Relay-Wifi/
 
 ## Hardware Specifications
 
-Default board wiring configured in `src/Infrastructure/Config/BoardConfig.h`:
+Default board wiring configured in `src/Infrastructure/Config/BoardConfig.h` and `src/Infrastructure/Config/config.h` (`RELAY_CHANNEL_COUNT` defaults to `1` and supports `1..4` channels):
 
 | Peripheral | GPIO Pin | Configuration | Function |
 |---|---|---|---|
-| **Relay 1** | `GPIO 4` | Output (Active High) | Primary relay output actuator |
+| **Relay 1** | `GPIO 4` | Output (Active High) | Primary relay output actuator (`device_switch1`) |
+| **Relay 2..4** *(optional)* | `GPIO 16 / 17 / 18` | Output (Active High) | Secondary relay actuators when `RELAY_CHANNEL_COUNT` is set to `2..4` (`device_switch2..4`) |
 | **Button 1** | `GPIO 0` | Input (`INPUT_PULLUP`) | Physical toggle (`50 ms` debounce) / Quick Pairing & SoftAP `VESIS-<ChipID>` (`5,000 ms` long press) |
+| **Button 2..4** *(optional)* | `GPIO 32 / 33 / 25` | Input (`INPUT_PULLUP`) | Per-channel physical toggle inputs when `RELAY_CHANNEL_COUNT` is set to `2..4` |
 | **Status LED** | `GPIO 2` | Output (Active High) | Multi-pattern WiFi, Quick Pairing, SoftAP, OTA, and connection status indicator |
 
 ---
@@ -239,8 +246,8 @@ Default board wiring configured in `src/Infrastructure/Config/BoardConfig.h`:
 
 The project relies on external libraries linked via PlatformIO:
 
-- **[ESP32_MQTTv5](https://github.com/JorgeGBeltre/ESP32_MQTTv5)** (`^1.0.3`): Native MQTT 5.0 client library for ESP32.
-- **[MQTTOTAv5](https://github.com/JorgeGBeltre/MQTTOTAv5)** (`^1.0.2`): Over-The-Air firmware updater over MQTT 5.0.
+- **[ESP32_MQTTv5](https://github.com/JorgeGBeltre/ESP32_MQTTv5)** (`v1.0.6`, linked locally via `file://../ESP32_MQTTv5`): Native MQTT 5.0 client library for ESP32 with dedicated TX/RX buffers, raw OTA topic coexistence (`setRawExclusiveTopic`), and `CONNACK`/`DISCONNECT` `ReasonString` inspection.
+- **[MQTTOTAv5](https://github.com/JorgeGBeltre/MQTTOTAv5)** (`v1.0.3`, linked locally via `file://../MQTTOTAv5`): Over-The-Air firmware updater over MQTT 5.0 preserving application Will messages.
 - **[NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino)** (`^1.4.1`): High-performance, lightweight Bluetooth Low Energy stack.
 - **[ArduinoJson](https://arduinojson.org/)** (`^6.21.0`): Efficient JSON serialization and parsing.
 - **[WiFiManager](https://github.com/tzapu/WiFiManager)** (`^2.0.17`): SoftAP web portal for runtime WiFi credentials provisioning.
@@ -314,13 +321,13 @@ This channel is focused strictly on:
 | **Device Key** | `aaaaaaaa-bbbb-cccc-dddd-000000000015` | `READ` | Factory secret/private hardware cryptographic key (`apikey`/`devicekey`) to verify authenticity and derive LAN keys | Unique cryptographic UUID |
 | **Bind Token** | `aaaaaaaa-bbbb-cccc-dddd-000000000016` | `READ` / `WRITE` | User account claim/binding token injected by mobile app to associate the switch with user profile | `"claim_tok_9876543210"` |
 | **WiFi SSID** | `aaaaaaaa-bbbb-cccc-dddd-000000000012` | `READ` / `WRITE` | 2.4 GHz wireless network SSID | `"MyHome_Fiber"` |
-| **WiFi Password** | `aaaaaaaa-bbbb-cccc-dddd-000000000013` | `READ` / `WRITE` | WPA/WPA2 network passphrase | `"SecretPassword123"` |
+| **WiFi Password** | `aaaaaaaa-bbbb-cccc-dddd-000000000013` | `WRITE` | WPA/WPA2 network passphrase (write-only; never exposed over BLE reads) | `"SecretPassword123"` |
 | **Cloud Server** | `aaaaaaaa-bbbb-cccc-dddd-000000000004` | `READ` / `WRITE` | Regional cloud server dispatch endpoint or MQTT broker | `"broker.hivemq.com"` |
-| **Server Port** | `aaaaaaaa-bbbb-cccc-dddd-000000000005` | `READ` / `WRITE` | TCP/TLS server port (string or integer) | `"8883"` (or `1883`) |
-| **User / Account** | `aaaaaaaa-bbbb-cccc-dddd-000000000006` | `READ` / `WRITE` | User account ID / registered email / MQTT username | `"user@example.com"` |
-| **MQTT Password** | `aaaaaaaa-bbbb-cccc-dddd-000000000007` | `READ` / `WRITE` | MQTT broker password (if applicable) | `""` |
-| **OTA HMAC Key** | `aaaaaaaa-bbbb-cccc-dddd-000000000011` | `READ` / `WRITE` | HMAC signature key for secure OTA firmware validation | `""` |
-| **JSON / Data Frame** | `aaaaaaaa-bbbb-cccc-dddd-000000000014` | `READ` / `WRITE` / `NOTIFY` | Unified frame channel (read dynamic self-identification; write JSON or Key=Value frames) | See frame format below |
+| **Server Port** | `aaaaaaaa-bbbb-cccc-dddd-000000000005` | `READ` / `WRITE` | TCP/TLS server port (plain TCP on `1883`, TLS on `8883`) | `"8883"` (or `1883`) |
+| **User / Account** | `aaaaaaaa-bbbb-cccc-dddd-000000000006` | `WRITE` | User account ID / MQTT API key (write-only secret) | `"user@example.com"` |
+| **MQTT Password** | `aaaaaaaa-bbbb-cccc-dddd-000000000007` | `WRITE` | MQTT broker password (write-only secret) | `""` |
+| **OTA HMAC Key** | `aaaaaaaa-bbbb-cccc-dddd-000000000011` | `WRITE` | HMAC signature key for secure OTA firmware validation (write-only secret) | `""` |
+| **JSON / Data Frame** | `aaaaaaaa-bbbb-cccc-dddd-000000000014` | `READ` / `WRITE` / `NOTIFY` | Unified frame channel with chunk reassembly (read dynamic self-identification; write JSON or Key=Value frames) | See frame format below |
 | **Save / ACK** | `aaaaaaaa-bbbb-cccc-dddd-000000000099` | `WRITE` / `READ` / `NOTIFY` | Save trigger into NVS and ACK notification (`"OK"`). Also accepts direct frame writes | `"READY"` -> Notifies `"OK"` |
 
 > [!NOTE]
@@ -402,7 +409,7 @@ To ensure instantaneous plug-and-play identification by generic mobile apps (nRF
 |---|---|---|---|
 | **Model Number String** | `0x2A24` | `READ` | `"Relay-Wifi ESP32"` |
 | **Serial Number String** | `0x2A25` | `READ` | `<DeviceID>` (e.g. `0000A1B2C3D4`) |
-| **Firmware Revision** | `0x2A26` | `READ` | Firmware version (e.g. `"v0.0.8"`) |
+| **Firmware Revision** | `0x2A26` | `READ` | Firmware version (e.g. `"v0.0.11"`) |
 | **Hardware Revision** | `0x2A27` | `READ` | `"ESP32"` |
 | **Manufacturer Name** | `0x2A29` | `READ` | `"VESIS"` |
 
@@ -471,32 +478,49 @@ ssid=MyWiFiNetwork_2.4G;pass=MySuperSecretPassword;server=broker.hivemq.com;port
 ### Device Identification to the Mobile App
 
 For seamless discovery and status tracking by the mobile app:
-1. **BLE Advertising**:
+1. **BLE Advertising & 7-Byte Manufacturer Data (`0xFFFF`)**:
    - Local name: `RELAY-<DeviceID>` (e.g. `RELAY-0000A1B2C3D4`).
    - Active Scan Response containing Service UUID `12345678-1234-1234-1234-123456789abc`.
+   - 7-byte Manufacturer Specific Data frame: `[0xFF, 0xFF, 'V', 'S', stateByte, 0x01, provFlags]`, where `0x01` identifies `device_family = "relay_wifi"`, `stateByte` encodes configuration state (`0x00` `unconfigured`, `0x01` `incomplete`, `0x02` `configured_disconnected`, `0x03` `connection_failed`, `0x04` `wifi_connected`), and `provFlags` encodes `bits 0..1` `credential_mode` (`0 = wifi`, `2 = adopt_only`), `bit 4` `supports_wifi`, `bit 5` `account_bound`, and `bits 6..7` `(channel_count - 1)`.
 2. **Device ID Read (`CHAR_DEVID_UUID`)**:
    - Returns the active unique chip identifier string.
 3. **Device Key Read (`CHAR_DEVKEY_UUID`)**:
    - Returns the factory cryptographic hardware secret key (`apikey`/`devicekey`).
 4. **Dynamic Self-Identification Frame Read (`CHAR_FRAME_JSON_UUID`)**:
-   - Performing a `READ` on `CHAR_FRAME_JSON_UUID` causes the firmware to generate and return a complete JSON snapshot in real time:
+   - Performing a `READ` on `CHAR_FRAME_JSON_UUID` causes the firmware to generate and return a complete non-secret JSON snapshot in real time (omitting stored Wi-Fi/MQTT passwords and API keys):
    ```json
    {
+     "device_family": "relay_wifi",
+     "device_code": 1,
      "device_type": "Relay-Wifi",
+     "model": "Relay-Wifi",
+     "channel_count": 1,
      "device_id": "0000A1B2C3D4",
+     "chip_id": "0000A1B2C3D4",
      "device_key": "A1B2C3D4-E5F6-4718-A93A-5A5A5A5A5A5A",
      "mac": "24:6F:28:XX:XX:XX",
-     "version": "v0.0.8",
-     "wifi_ssid": "MyWiFiNetwork",
+     "version": "v0.0.11",
+     "config_state": "unconfigured",
+     "credential_mode": "wifi",
+     "requires_wifi": true,
+     "requires_apn": false,
+     "supports_wifi": true,
+     "supports_apn": false,
+     "adopt_ready": false,
+     "account_bound": false,
+     "wifi_connected": false,
+     "configured_ssid": "",
      "server": "broker.hivemq.com",
      "port": 8883,
-     "account": "user@example.com",
-     "bind_token": "claim_tok_9876543210",
-     "status": "ready_to_claim"
+     "status": "ready_to_claim",
+     "methods": ["ble", "softap", "smartconfig", "lan"]
    }
    ```
-5. **ACK Response via BLE Notification**:
-   - Upon saving configuration (whether via frame or Save characteristic), the firmware emits a BLE notification containing `"OK"` on both `CHAR_SAVE_UUID` and `CHAR_FRAME_JSON_UUID`, allowing the mobile app to display immediate visual confirmation before reboot.
+   - When Wi-Fi is already connected while `!account_bound`, `credential_mode` switches to `"adopt_only"` (`adopt_ready: true`) and omitting `ssid`/`wifi_ssid` in incoming frames preserves stored Wi-Fi credentials while binding platform broker/account credentials (`account_bound = true`).
+5. **Live Wi-Fi Verification, SmartConfig UDP ACK & Safe BLE/SoftAP Transitions**:
+   - When new Wi-Fi credentials arrive over BLE, the firmware tests `WiFi.begin(ssid, pass)` before closing GATT, notifying `"OK"` / `wifi_connected` on association or reporting authentication/AP errors (`auth_failed` / `ap_not_found`) so invalid credentials can be corrected immediately.
+   - SmartConfig (`ESP-Touch / AirKiss`) broadcasts UDP `:18266` JSON ACKs (`chip_id`, `ip`, `port: 8081`, `channel_count`) upon `WL_CONNECTED`.
+   - Before `NimBLEDevice::deinit(true)` or switching to Stage 2 SoftAP (`VESIS-<ChipID>`), `_bleStopping` suppresses `onDisconnect` re-advertising, disconnects active GATT peers cleanly, and `WifiApProvisioningPortal::startPortal` disables background station `autoReconnect` (`WiFi.setAutoReconnect(false)`) with `Connection: close` HTTP responses to lock the SoftAP on a single stable 2.4 GHz channel.
 
 ---
 
@@ -514,37 +538,41 @@ Provisioning is governed by a fault-tolerant 2-stage architecture (`runPairingWo
 
 ### Topic Topology
 
-Topics are derived dynamically at runtime using the chip's unique eFuse MAC address or the configured Device ID:
+Topics are derived dynamically at runtime in `MqttTopics::forDevice(chipId)` (`src/Application/Messaging/MqttTopics.h`) so every channel is isolated per `<ChipID>` on multi-tenant brokers (auto-selecting plain TCP on port `1883` and `WiFiClientSecure` TLS on port `8883`):
 
 | Topic | Direction | Description |
 |---|---|---|
-| `status` | Outbound | Periodic or on-demand full JSON state report; also used as MQTT 5.0 LWT offline topic |
-| `events` | Outbound | System events (`MQTT_CONNECTED`, `BUTTON_PRESS`, `DEVICE_SET_COMMAND`, `PULSE_AUTO_OFF`, `TIMER_TRIGGER`, etc.) |
-| `telemetry` | Outbound | Periodic health metrics snapshot |
-| `commands` | Inbound | Global control commands (`reset`, `status`, `toggle_all`, `sync_states`, `switch1:...`, `startup:...`, `pulse:...`, `sled:...`) |
+| `status/<ChipID>` | Outbound | Periodic (`60 s`) or on-demand full JSON state report (`Retain = true`); also used as MQTT 5.0 LWT offline topic |
+| `events/<ChipID>` | Outbound | Discrete events (`MQTT_CONNECTED`, `BUTTON_PRESS`, `DEVICE_COMMAND`, `PULSE_AUTO_OFF`, `TIMER_TRIGGER`, `TIMERS_UPDATED`, `WIFI_UPDATED`, `WIFI_UPDATE_FAILED`, `Retain = false`) |
+| `telemetry/<ChipID>` | Outbound | Periodic operational and diagnostic metrics snapshot (`Retain = false`) |
+| `commands/<ChipID>` | Inbound | Device-scoped control commands and deterministic JSON command envelopes (`Retain = false`) |
+| `devices/<ChipID>/commands/ack` | Outbound | Correlated command execution ACKs (`commandId`, `sequence`, `stateVersion`, `reportedState`, `status`: `APPLIED` \| `STALE_REJECTED` \| `FAILED`) |
+| `devices/<ChipID>/timers/command` | Inbound | Synchronizes up to `8` UTC timers (`set_timers`) into NVS without actuating relays on timer deletion |
+| `devices/<ChipID>/wifi/command` | Inbound | Guarded hot Wi-Fi credential update (`set_wifi`) with 15 s association verification and automatic rollback |
+| `devices/<ChipID>/unlink/command` | Inbound | Authenticated platform account unlink (`unlink_proof = SHA256(deviceKey + ":UNLINK:" + chipId)[0..31]`) |
 | `event/<ChipID>` | Inbound | Device-targeted event channel |
-| `device_switch1/state` | Inbound | Turn relay on/off/toggle via MQTT payload (`on`, `off`, `toggle`) |
-| `device_switch1/command` | Inbound | Alternate command topic |
-| `device_switch1_state` | Inbound/Outbound | State sync: inbound desired state from cloud; outbound current confirmed state |
-| `device_switch1/get` | Outbound | State query published on connection to request cloud synchronization |
-| `ota` | Inbound | Handled automatically by `MQTTOTAv5` |
+| `devices/<ChipID>/device_switch<N>/state` | Inbound | Turn channel `<N>` (`1..4`) on/off/toggle via MQTT payload (`on`, `off`, `toggle`) |
+| `devices/<ChipID>/device_switch<N>/command` | Inbound | Per-channel command topic |
+| `devices/<ChipID>/device_switch<N>_state` | Outbound | Confirmed physical channel state |
+| `devices/<ChipID>/device_switch<N>/report` | Outbound | ACL-authorized uplink physical state confirmation (`"on"` / `"off"`) |
+| `ota/<ChipID>` | Inbound | Exclusive binary OTA stream (`setRawExclusiveTopic`) handled by `MQTTOTAv5` |
 
 ### Command Handling
 
-Sending strings to the `commands` topic triggers the following actions in `RelayFirmwareController::processCommand`:
+Sending plain command strings or deterministic JSON envelopes (`{"commandId":"...","sequence":125,"action":"SET_POWER","channel":1,"desiredState":false}`) to `commands/<ChipID>` triggers the following actions in `RelayFirmwareController::processCommand`:
 
 - `"reset"`: Triggers a clean system restart via `ESP.restart()`.
 - `"status"`: Forces immediate publication of the full device status JSON.
-- `"toggle_all"`: Inverts all active relays and publishes their state updates.
-- `"sync_states"`: Queries the server for current cloud desired states.
-- `"switch1:on"`, `"switch1:off"`, `"switch1:toggle"`: Directly modifies Relay 1.
+- `"toggle_all"`, `"all:on"`, `"all:off"`: Toggles or explicitly sets all configured relay channels (`1..RELAY_CHANNEL_COUNT`) and publishes confirmed states.
+- `"switch<N>:on"`, `"switch<N>:off"`, `"switch<N>:toggle"` (e.g. `"switch1:on"` .. `"switch4:off"`): Directly modifies Relay `<N>`, verifies GPIO pin readback (`IRelayController::readState()`), deduplicates repeated `commandId` entries, rejects stale `sequence < lastCommandSequence` (`STALE_REJECTED`), and emits a correlated ACK on `devices/<ChipID>/commands/ack`.
 - `"startup:off"`, `"startup:on"`, `"startup:stay"`: Configures the power-on `StartupMode` via `RelayService::setStartupMode` and persists it in NVS (`saveStartupModeNvs`).
 - `"pulse:on,<width_ms>"`, `"pulse:off"`: Enables or disables Inching / Pulse mode (`500..36000000 ms` in `500 ms` steps) via `RelayService::configurePulse` and persists it in NVS (`savePulseConfigNvs`).
 - `"sled:on"`, `"sled:off"`: Enables or disables the operational status LED (`GpioIndicator::setSledOnline`) and persists it in NVS (`saveSledOnlineNvs`).
+- **Account Unlink vs Wi-Fi Outage Isolation**: While `account_bound == true`, router power loss or broker downtime never erases credentials or enters Quick Pairing automatically. Only a verified `unlink_proof` (`SHA256(deviceKey + ":UNLINK:" + chipId)[0..31]`) received on `devices/<ChipID>/unlink/command`, in a deferred `CONNACK`/`DISCONNECT` `0x87` (`ReasonString = "ACCOUNT_UNLINKED:<proof>"`), or on `POST /zeroconf/unlink` turns relays `OFF`, wipes NVS + Wi-Fi credentials, sets `account_bound = false`, and reboots into Stage 1 Quick Pairing.
 
 ### JSON Telemetry & Status Payloads
 
-Status publication to `status`:
+Status publication to `status/<ChipID>`:
 
 ```json
 {
@@ -553,14 +581,19 @@ Status publication to `status`:
     "ChipId": "0000A1B2C3D4",
     "MacAddress": "24:6F:28:XX:XX:XX",
     "ChipType": "ESP32-D0WDQ6",
-    "FirmwareVersion": "v0.0.8"
+    "FirmwareVersion": "v0.0.11"
   },
   "Timestamp": "2026-10-10T20:30:00.000Z",
   "Details": {
     "chipId": "0000A1B2C3D4",
+    "account_bound": true,
+    "channel_count": 1,
+    "state_version": 42,
     "sync_completed": true,
     "devices_count": 1,
     "wifi_status": "connected",
+    "wifi_ssid": "MyWiFiNetwork",
+    "local_ip": "192.168.1.50",
     "rssi": -58,
     "free_heap": 182400,
     "uptime": 145020,
@@ -606,20 +639,21 @@ Status publication to `status`:
 
 ### Local LAN HTTP Endpoints (`:8081`)
 
-All endpoints accept `HTTP POST` with either a plain JSON body (`{"data": {...}}`) or an encrypted envelope (`{"sequence":"...","deviceid":"...","selfApikey":"...","iv":"<Base64>","encrypt":true,"data":"<Base64>"}`):
+`LanZeroconfServer` advertises `_iot._tcp.local` (`iot_<ChipID>.local`), responds to UDP `:48899` (`IOT_DISCOVER`) broadcasts, supports `GET /zeroconf/info` (including `device_family`, `device_code`, `credential_mode`, `account_bound`, `channel_count`, `switches`, `timers`, and `lan_proof = SHA256(deviceKey:chipId:localIp)[0..31]`), and accepts `HTTP POST` with either a plain JSON body (`{"data": {...}}`) or an encrypted envelope (`{"sequence":"...","deviceid":"...","selfApikey":"...","iv":"<Base64>","encrypt":true,"data":"<Base64>"}`):
 
 | Endpoint | Method | Description | Example `data` Payload |
 |---|---|---|---|
 | `/zeroconf/switch` | `POST` | Turn relay ON or OFF immediately over LAN | `{"switch":"on"}` |
-| `/zeroconf/switches` | `POST` | Multi-channel array format for relay actuation | `{"switches":[{"switch":"off","outlet":0}]}` |
+| `/zeroconf/switches` | `POST` | Multi-channel array format for relay actuation (`outlet: 0..3`) | `{"switches":[{"switch":"off","outlet":0}]}` |
 | `/zeroconf/startup` | `POST` | Configure power-on behavior (`off`, `on`, `stay`) | `{"startup":"stay"}` |
 | `/zeroconf/pulse` | `POST` | Configure Inching / Pulse mode (`500..36000000 ms`) | `{"pulse":"on","pulseWidth":1500}` |
 | `/zeroconf/sled` | `POST` | Enable or disable the status LED when online | `{"sledOnline":"off"}` |
-| `/zeroconf/info` | `POST` | Query current switch, startup, pulse, SLED, version, and RSSI | `{}` |
+| `/zeroconf/info` | `GET` / `POST` | Query current switch(es), `device_family`, `credential_mode`, `account_bound`, `lan_proof`, startup, pulse, SLED, timers, version, and RSSI | `{}` |
 | `/zeroconf/signal_strength` | `POST` | Query current Wi-Fi RSSI in dBm | `{}` |
 | `/zeroconf/wifi` | `POST` | Update stored Wi-Fi SSID, password, and optional MQTT 5.0 broker parameters in NVS | `{"ssid":"NewWiFi","password":"Pass"}` |
-| `/zeroconf/config` | `POST` | Update MQTT 5.0 broker, port, credentials, bind token, startup, pulse, and SLED in NVS | `{"mqtt_broker":"broker.example.com","mqtt_port":8883,"startup":"stay"}` |
-| `/zeroconf/timers` | `POST` | Replace/configure up to 8 scheduled timers (`once`, `repeat`, `duration`) | `{"timers":[{"id":1,"enabled":1,"type":"once","at":1793500000,"do":{"switch":"on"}}]}` |
+| `/zeroconf/config` | `POST` | Update MQTT 5.0 broker, port, credentials, bind token (`account_bound = true`), startup, pulse, and SLED in NVS | `{"mqtt_broker":"broker.example.com","mqtt_port":8883,"startup":"stay"}` |
+| `/zeroconf/timers` | `POST` | Replace/configure up to 8 scheduled timers (`once`, `repeat`, `duration`, `channel: 0..4`) | `{"timers":[{"id":"t1","enabled":true,"type":"once","channel":1,"at":1793500000,"do":{"switch":"on"}}]}` |
+| `/zeroconf/unlink` | `POST` | Cryptographically verified local account unlink (`unlink_proof`) resetting device into Stage 1 Quick Pairing | `{"unlink_proof":"<32-hex-sha256>"}` |
 | `/zeroconf/ota_unlock` | `POST` | Unlock local OTA state flag | `{}` |
 
 ---
