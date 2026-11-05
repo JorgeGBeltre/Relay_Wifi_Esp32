@@ -246,8 +246,8 @@ Default board wiring configured in `src/Infrastructure/Config/BoardConfig.h` and
 
 The project relies on external libraries linked via PlatformIO:
 
-- **[ESP32_MQTTv5](https://github.com/JorgeGBeltre/ESP32_MQTTv5)** (`v1.0.6`, linked locally via `file://../ESP32_MQTTv5`): Native MQTT 5.0 client library for ESP32 with dedicated TX/RX buffers, raw OTA topic coexistence (`setRawExclusiveTopic`), and `CONNACK`/`DISCONNECT` `ReasonString` inspection.
-- **[MQTTOTAv5](https://github.com/JorgeGBeltre/MQTTOTAv5)** (`v1.0.3`, linked locally via `file://../MQTTOTAv5`): Over-The-Air firmware updater over MQTT 5.0 preserving application Will messages.
+- **[ESP32_MQTTv5](https://github.com/JorgeGBeltre/ESP32_MQTTv5)** (`v1.0.6`): Native MQTT 5.0 client library for ESP32 with dedicated TX/RX buffers, raw OTA topic coexistence (`setRawExclusiveTopic`), and `CONNACK`/`DISCONNECT` `ReasonString` inspection.
+- **[MQTTOTAv5](https://github.com/JorgeGBeltre/MQTTOTAv5)** (`v1.0.3`): Over-The-Air firmware updater over MQTT 5.0 preserving application Will messages.
 - **[NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino)** (`^1.4.1`): High-performance, lightweight Bluetooth Low Energy stack.
 - **[ArduinoJson](https://arduinojson.org/)** (`^6.21.0`): Efficient JSON serialization and parsing.
 - **[WiFiManager](https://github.com/tzapu/WiFiManager)** (`^2.0.17`): SoftAP web portal for runtime WiFi credentials provisioning.
