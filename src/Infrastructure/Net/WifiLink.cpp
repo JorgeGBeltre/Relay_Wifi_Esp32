@@ -36,6 +36,7 @@ bool WifiLink::connect() {
 
     Serial.printf("[WIFI] Iniciando conexión WiFi a SSID: %s\n", ssid_.c_str());
     WiFi.mode(WIFI_STA);
+    WiFi.setAutoReconnect(true);
     WiFi.begin(ssid_.c_str(), pass_.c_str());
     lastReconnectAttempt_ = millis();
 
@@ -75,6 +76,7 @@ void WifiLink::loop() {
             if (!ssid_.empty()) {
                 Serial.printf("[WIFI] Reintentando conexión a %s...\n", ssid_.c_str());
                 WiFi.mode(WIFI_STA);
+                WiFi.setAutoReconnect(true);
                 WiFi.begin(ssid_.c_str(), pass_.c_str());
             }
         }

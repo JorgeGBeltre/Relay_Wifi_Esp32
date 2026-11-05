@@ -277,6 +277,7 @@ static void runPairingWorkflow(bool isInitialUnprovisionedBoot) {
 
         if (res == QuickPairingResult::CancelledByButton && !isInitialUnprovisionedBoot) {
             Serial.println("[PAIRING] Emparejamiento cancelado por pulsación corta. Retomando operación normal.");
+            reloadRuntimeConnectivity();
             return;
         }
 
@@ -287,6 +288,10 @@ static void runPairingWorkflow(bool isInitialUnprovisionedBoot) {
                 if (!isInitialUnprovisionedBoot) {
                     reloadRuntimeConnectivity();
                 }
+                return;
+            }
+            if (!isInitialUnprovisionedBoot) {
+                reloadRuntimeConnectivity();
                 return;
             }
         }

@@ -23,6 +23,7 @@
 
 static volatile bool _configSaved = false;
 static volatile bool _pendingBleVerify = false;
+static volatile bool _bleStopping = false;
 static volatile uint8_t _bleWifiDiscReason = 0;
 static volatile uint8_t _bleWifiAuthFailures = 0;
 static std::string _rxFrameBuffer;
@@ -235,6 +236,9 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     }
     void onDisconnect(NimBLEServer* pServer) override {
         (void)pServer;
+        if (_bleStopping) {
+            return;
+        }
         Serial.println("[BLE] App móvil desconectada — reanudando publicidad BLE.");
         NimBLEDevice::startAdvertising();
     }
@@ -454,6 +458,7 @@ QuickPairingResult runQuickPairing(unsigned long timeoutMs,
 
     _configSaved = false;
     _pendingBleVerify = false;
+    _bleStopping = false;
     _bleWifiDiscReason = 0;
     _bleWifiAuthFailures = 0;
     _rxFrameBuffer.clear();
@@ -501,6 +506,7 @@ QuickPairingResult runQuickPairing(unsigned long timeoutMs,
     NimBLEDevice::setMTU(512);
 
     NimBLEServer* server = NimBLEDevice::createServer();
+    server->advertiseOnDisconnect(false);
     server->setCallbacks(new ServerCallbacks());
 
     NimBLEService* dis = server->createService(NimBLEUUID((uint16_t)0x180A));
@@ -609,9 +615,20 @@ QuickPairingResult runQuickPairing(unsigned long timeoutMs,
     }
 
     auto cleanupBleOnly = [&]() {
+        _bleStopping = true;
         WiFi.removeEvent(evId);
         WiFi.stopSmartConfig();
+        server->advertiseOnDisconnect(false);
         adv->stop();
+        auto peers = server->getPeerDevices();
+        for (uint16_t connId : peers) {
+            server->disconnect(connId);
+        }
+        unsigned long discWait = millis();
+        while (server->getConnectedCount() > 0 && (millis() - discWait) < 400UL) {
+            delay(20);
+        }
+        delay(80);
         NimBLEDevice::deinit(true);
     };
 

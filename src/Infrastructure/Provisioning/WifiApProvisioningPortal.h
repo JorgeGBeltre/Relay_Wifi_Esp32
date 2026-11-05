@@ -98,6 +98,7 @@ public:
 
                 String out;
                 serializeJson(doc, out);
+                wifiManager.server->sendHeader("Connection", "close");
                 wifiManager.server->send(200, "application/json", out);
             };
 
@@ -106,12 +107,14 @@ public:
                 StaticJsonDocument<1024> doc;
                 if (deserializeJson(doc, body) != DeserializationError::Ok ||
                     (!doc.containsKey("ssid") && !doc.containsKey("wifi_ssid"))) {
+                    wifiManager.server->sendHeader("Connection", "close");
                     wifiManager.server->send(400, "application/json", "{\"error\":400,\"reason\":\"invalid_payload\"}");
                     return;
                 }
 
                 String nextSsid = doc.containsKey("ssid") ? doc["ssid"].as<String>() : doc["wifi_ssid"].as<String>();
                 if (nextSsid.length() == 0 || nextSsid.length() > 32) {
+                    wifiManager.server->sendHeader("Connection", "close");
                     wifiManager.server->send(400, "application/json", "{\"error\":400,\"reason\":\"invalid_ssid\"}");
                     return;
                 }
@@ -162,6 +165,7 @@ public:
                 }
 
                 config.last_wifi_error = "";
+                wifiManager.server->sendHeader("Connection", "close");
                 wifiManager.server->send(200, "application/json", "{\"error\":0,\"ack\":\"received\"}");
                 delay(150);
                 jsonApSaved = true;
@@ -186,6 +190,12 @@ public:
             }
             button->init();
         }
+
+        // Desactivar auto-reconexión STA temporalmente para evitar escaneos de canal 1..13
+        // que desplacen el canal del SoftAP VESIS-<ChipID> durante el handshake WPA2 con el móvil.
+        WiFi.setAutoReconnect(false);
+        WiFi.disconnect(false, false);
+        delay(100);
 
         wifiManager.startConfigPortal(apSSID.c_str(), apPassword);
 
@@ -254,12 +264,14 @@ public:
             delay(250);
             wifiManager.stopConfigPortal();
             WiFi.mode(WIFI_STA);
+            WiFi.setAutoReconnect(true);
             return true;
         }
 
         Serial.println("[PROVISION] Portal SoftAP finalizado sin cambios.");
         wifiManager.stopConfigPortal();
         WiFi.mode(WIFI_STA);
+        WiFi.setAutoReconnect(true);
         return false;
     }
 };

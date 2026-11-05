@@ -45,10 +45,15 @@ domain::ButtonEvent GpioButton::update() {
         return domain::ButtonEvent::None;
     }
 
-    if ((now - lastSampleMs_) < SAMPLE_TICK_MS) {
+    const unsigned long elapsedMs = now - lastSampleMs_;
+    if (elapsedMs < SAMPLE_TICK_MS) {
         return domain::ButtonEvent::None;
     }
-    lastSampleMs_ = now;
+    uint32_t elapsedTicks = static_cast<uint32_t>(elapsedMs / SAMPLE_TICK_MS);
+    if (elapsedTicks > 4U) {
+        elapsedTicks = 4U;
+    }
+    lastSampleMs_ += elapsedTicks * SAMPLE_TICK_MS;
 
     const uint32_t debounceTicks = (debounceMs_ >= SAMPLE_TICK_MS) ? (debounceMs_ / SAMPLE_TICK_MS) : 2U;
     const uint32_t longPressTicks = (longPressMs_ >= SAMPLE_TICK_MS) ? (longPressMs_ / SAMPLE_TICK_MS) : 200U;
@@ -56,7 +61,7 @@ domain::ButtonEvent GpioButton::update() {
     const bool pinLow = (digitalRead(pin_) == LOW);
     if (pinLow) {
         releaseTicks_ = 0;
-        ++pressTicks_;
+        pressTicks_ += elapsedTicks;
         if (pressTicks_ >= longPressTicks && !longPressFired_) {
             longPressFired_ = true;
             return domain::ButtonEvent::LongPress;
