@@ -81,9 +81,9 @@ void computeUnlinkProofHex(const char* deviceKey, const char* chipId, char outHe
     uint8_t digest[32] = {0};
     mbedtls_sha256_context ctx;
     mbedtls_sha256_init(&ctx);
-    mbedtls_sha256_starts_ret(&ctx, 0);
-    mbedtls_sha256_update_ret(&ctx, reinterpret_cast<const unsigned char*>(inputBuf), static_cast<size_t>(n));
-    mbedtls_sha256_finish_ret(&ctx, digest);
+    mbedtls_sha256_starts(&ctx, 0);
+    mbedtls_sha256_update(&ctx, reinterpret_cast<const unsigned char*>(inputBuf), static_cast<size_t>(n));
+    mbedtls_sha256_finish(&ctx, digest);
     mbedtls_sha256_free(&ctx);
 
     for (size_t i = 0; i < 16; ++i) {

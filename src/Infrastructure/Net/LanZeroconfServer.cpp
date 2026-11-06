@@ -24,11 +24,11 @@ void computeLanProofHex(const std::string &deviceKey, const std::string &chipId,
   uint8_t digest[32] = {0};
   mbedtls_sha256_context ctx;
   mbedtls_sha256_init(&ctx);
-  mbedtls_sha256_starts_ret(&ctx, 0);
-  mbedtls_sha256_update_ret(
+  mbedtls_sha256_starts(&ctx, 0);
+  mbedtls_sha256_update(
       &ctx, reinterpret_cast<const unsigned char *>(input.data()),
       input.size());
-  mbedtls_sha256_finish_ret(&ctx, digest);
+  mbedtls_sha256_finish(&ctx, digest);
   mbedtls_sha256_free(&ctx);
 
   for (size_t i = 0; i < 16; ++i) {
