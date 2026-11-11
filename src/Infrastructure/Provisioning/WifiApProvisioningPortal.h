@@ -5,6 +5,7 @@
 #include <WiFi.h>
 #include <WiFiManager.h>
 #include <cstdlib>
+#include <functional>
 #include "Domain/Interfaces/IButtonHandler.h"
 #include "Domain/Interfaces/IIndicator.h"
 #include "Infrastructure/Config/nvs_config.h"
@@ -15,7 +16,8 @@ class WifiApProvisioningPortal {
 public:
     static bool startPortal(uint32_t timeoutSec = 180,
                             domain::IIndicator* indicator = nullptr,
-                            domain::IButtonHandler* button = nullptr) {
+                            domain::IButtonHandler* button = nullptr,
+                            std::function<void(bool isPrimaryShortPress)> offlineTickCb = nullptr) {
         loadConfig();
 
         WiFiManager wifiManager;
@@ -200,11 +202,12 @@ public:
         wifiManager.setConfigPortalBlocking(false);
         wifiManager.setConfigPortalTimeout(timeoutSec);
 
-        // Esperar a que el usuario suelte el botón de la 2ª pulsación larga antes de escuchar pulsación corta de salida
+        // Esperar a que el usuario suelte el botón de la 2ª pulsación larga antes de escuchar nuevos eventos
         if (button) {
             unsigned long releaseStart = millis();
             while (digitalRead(button->getPin()) == LOW && (millis() - releaseStart) < 3000) {
                 if (indicator) indicator->update();
+                if (offlineTickCb) offlineTickCb(false);
                 delay(20);
             }
             button->init();
@@ -231,15 +234,25 @@ public:
                 break;
             }
 
-            // Una pulsación corta en modo SoftAP cancela y sale del modo emparejamiento
+            // En modo SoftAP:
+            // - Pulsación corta: conmuta el relé localmente (Offline-First) manteniendo el portal activo
+            // - Pulsación larga (5s): sale del portal SoftAP (retornando a BLE Quick Pairing o modo normal)
             if (button) {
                 auto ev = button->update();
                 if (ev == domain::ButtonEvent::ShortPress) {
-                    Serial.println("[PROVISION] Pulsación corta detectada -> Saliendo de portal SoftAP VESIS.");
+                    Serial.println("[PROVISION] Pulsación corta en SoftAP -> Conmutando relé localmente (SoftAP continúa activo).");
+                    if (offlineTickCb) {
+                        offlineTickCb(true);
+                    }
+                } else if (ev == domain::ButtonEvent::LongPress) {
+                    Serial.println("[PROVISION] Pulsación larga (5s) detectada -> Saliendo de portal SoftAP VESIS.");
                     cancelledByButton = true;
                     wifiManager.stopConfigPortal();
                     break;
                 }
+            }
+            if (offlineTickCb) {
+                offlineTickCb(false);
             }
 
             delay(20);

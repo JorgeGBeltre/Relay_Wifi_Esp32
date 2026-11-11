@@ -65,7 +65,7 @@ The system natively integrates **[ESP32_MQTTv5](https://github.com/JorgeGBeltre/
 | **Clean Architecture** | Pure Domain (zero-dependency C++17 entities/interfaces), decoupled Application services, isolated Infrastructure drivers, and unified Presentation composition root |
 | **Native MQTT 5.0** | Powered by `ESP32_MQTTv5` — TLS encryption (`WiFiClientSecure`), keep-alive, sessions, properties, and JSON Last Will & Testament (LWT) |
 | **Secure OTA Updates** | Powered by `MQTTOTAv5` — chunked binary transfers over MQTT 5.0, SHA-256 hash checks, automatic rollback protection, and non-blocking restarts |
-| **Quick Pairing (BLE + SmartConfig)** | Powered by `NimBLE-Arduino` + `ESP-Touch / AirKiss` (`runQuickPairing`) — simultaneous BLE GATT (`RELAY-<DeviceID>`) and Wi-Fi SmartConfig onboarding via mobile app frames or individual GATT characteristics, with hardware self-identification (`Device ID` + factory `Device Key`) and account claim tokens (`Bind Token`) |
+| **Quick Pairing (BLE + SmartConfig)** | Powered by `NimBLE-Arduino` + `ESP-Touch / AirKiss` (`runQuickPairing`) — simultaneous BLE GATT (`VESIS-<DeviceID>`) and Wi-Fi SmartConfig onboarding via mobile app frames or individual GATT characteristics, with hardware self-identification (`Device ID` + factory `Device Key`) and account claim tokens (`Bind Token`) |
 | **2-Stage Pairing & SoftAP `VESIS-<ChipID>`** | Stage 1 launches Quick Pairing (`runPairingWorkflow`) on a `5 s` long press; a 2nd `5 s` long press (or initial boot timeout) transitions to the `VESIS-<ChipID>` SoftAP captive portal (`WifiApProvisioningPortal::startPortal`), while a short press exits pairing mode |
 | **Power-On State (`StartupMode`) & Deferred Save** | Immediate `< 20 ms` Offline-First boot restoration (`initWithStartupConfig`) distinguishing true hardware power-on resets (`ESP_RST_POWERON` / `ESP_RST_BROWNOUT` / `ESP_RST_EXT`) from software resets (`RTC_NOINIT` state mask), supporting `Off`, `On`, and `Stay` modes (`setStartupMode`) with `150 ms` deferred NVS writes (`flushDeferredSave`) |
 | **Multi-Channel Relay Support (`1..4` Channels)** | Configurable `RELAY_CHANNEL_COUNT` (`1..4`, model `Relay-Wifi` .. `Relay-Wifi-4CH`) with per-channel physical buttons, `switch<N>:on\|off\|toggle`, `all:on\|off`, and multi-outlet LAN `/zeroconf/switches` |
@@ -296,7 +296,7 @@ This channel is focused strictly on:
 |  Mobile App (BLE)  |                    | Relay-Wifi (ESP32)  |                    |   NVS Flash Memory   |
 +--------------------+                    +---------------------+                    +----------------------+
           |                                         |                                          |
-          | --- 1. Scan ('RELAY-<DeviceID>') -----> |                                          |
+          | --- 1. Scan ('VESIS-<DeviceID>') -----> |                                          |
           | --- 2. Connect to Service UUID -------> |                                          |
           |                                         |                                          |
           | <-- 3. Read CHAR_DEVID / JSON Frame --- | (Identification confirmed)               |
@@ -313,7 +313,7 @@ This channel is focused strictly on:
 ### GATT Service & Characteristics Layout
 
 - **Service UUID**: `12345678-1234-1234-1234-123456789abc`
-- **Advertisement Name**: `RELAY-<DeviceID>` (e.g. `RELAY-0000A1B2C3D4`)
+- **Advertisement Name**: `VESIS-<DeviceID>` (e.g. `VESIS-0000A1B2C3D4`)
 
 | Characteristic | UUID | Permissions | Description | Example / Default Value |
 |---|---|---|---|---|
@@ -350,7 +350,7 @@ The provisioning flow executes a 7-step deterministic security and association l
 
 #### Step 2: BLE Stack, GATT Server & SmartConfig Startup
 1. The firmware starts **Wi-Fi SmartConfig (`ESP-Touch / AirKiss`)** in station mode (`WiFi.beginSmartConfig()`).
-2. In parallel, the firmware sets the BLE local advertising name to `RELAY-<DeviceID>` (e.g., `RELAY-0000A1B2C3D4`).
+2. In parallel, the firmware sets the BLE local advertising name to `VESIS-<DeviceID>` (e.g., `VESIS-0000A1B2C3D4`).
 3. The NimBLE stack initializes with an extended MTU of **512 bytes**, allowing high-throughput JSON frame transfers without packet truncation.
 4. The server starts the standard **Bluetooth SIG Device Information Service** (`0x180A`) for universal mobile OS compatibility.
 5. The server creates the primary **Relay Provisioning Service** (`12345678-1234-1234-1234-123456789abc`) and registers all credential and identity characteristics.
@@ -358,7 +358,7 @@ The provisioning flow executes a 7-step deterministic security and association l
 
 #### Step 3: Mobile App Scanning & Hardware Authenticity Verification
 1. The user opens the mobile application (where they have already authenticated into their cloud user account).
-2. The mobile app scans for BLE peripherals matching the `RELAY-*` prefix or advertising the Service UUID.
+2. The mobile app scans for BLE peripherals matching the `VESIS-*` prefix or advertising the Service UUID.
 3. Upon connection, the app reads:
    - `CHAR_DEVID_UUID` (`...0008`): Confirms the target device ID.
    - `CHAR_DEVKEY_UUID` (`...0015`): Reads the factory cryptographic secret key (`apikey`).
@@ -440,7 +440,7 @@ For mobile apps preferring to send all parameters in a single transmission paylo
   "port": 8883,
   "account": "user@example.com",
   "bind_token": "claim_tok_9876543210abcdef",
-  "device_id": "RELAY-0000A1B2C3D4",
+  "device_id": "VESIS-0000A1B2C3D4",
   "ota_key": "s3cr3t_k3y",
   "startup": "stay",
   "pulse": "off",
@@ -468,7 +468,7 @@ For mobile apps preferring to send all parameters in a single transmission paylo
 Useful for lightweight mobile apps or BLE serial terminals without a JSON serializer:
 
 ```text
-ssid=MyWiFiNetwork_2.4G;pass=MySuperSecretPassword;server=broker.hivemq.com;port=8883;account=user@example.com;token=claim_tok_9876543210abcdef;id=RELAY-0000A1B2C3D4
+ssid=MyWiFiNetwork_2.4G;pass=MySuperSecretPassword;server=broker.hivemq.com;port=8883;account=user@example.com;token=claim_tok_9876543210abcdef;id=VESIS-0000A1B2C3D4
 ```
 
 *(Accepts `;`, `&`, or newline `\n` as delimiters, and `=` or `:` as key-value separators).*
@@ -479,7 +479,7 @@ ssid=MyWiFiNetwork_2.4G;pass=MySuperSecretPassword;server=broker.hivemq.com;port
 
 For seamless discovery and status tracking by the mobile app:
 1. **BLE Advertising & 7-Byte Manufacturer Data (`0xFFFF`)**:
-   - Local name: `RELAY-<DeviceID>` (e.g. `RELAY-0000A1B2C3D4`).
+   - Local name: `VESIS-<DeviceID>` (e.g. `VESIS-0000A1B2C3D4`).
    - Active Scan Response containing Service UUID `12345678-1234-1234-1234-123456789abc`.
    - 7-byte Manufacturer Specific Data frame: `[0xFF, 0xFF, 'V', 'S', stateByte, 0x01, provFlags]`, where `0x01` identifies `device_family = "relay_wifi"`, `stateByte` encodes configuration state (`0x00` `unconfigured`, `0x01` `incomplete`, `0x02` `configured_disconnected`, `0x03` `connection_failed`, `0x04` `wifi_connected`), and `provFlags` encodes `bits 0..1` `credential_mode` (`0 = wifi`, `2 = adopt_only`), `bit 4` `supports_wifi`, `bit 5` `account_bound`, and `bits 6..7` `(channel_count - 1)`.
 2. **Device ID Read (`CHAR_DEVID_UUID`)**:
@@ -527,10 +527,10 @@ For seamless discovery and status tracking by the mobile app:
 ### Dual Provisioning Flow & Fallback Architecture
 
 Provisioning is governed by a fault-tolerant 2-stage architecture (`runPairingWorkflow`):
-1. **First Boot (Unprovisioned)**: Starts in Quick Pairing (`runQuickPairing`: BLE GATT + SmartConfig) for 60 seconds. If no configuration is received, it falls back automatically to the SoftAP rescue web portal (`VESIS-<ChipID>`).
-2. **1st Button Long-Press (`5,000 ms`)**: At any point during runtime, holding the physical button for 5 seconds triggers Stage 1 Quick Pairing (`RELAY-<DeviceID>` BLE GATT + SmartConfig) for 180 seconds with the double-blink LED pattern.
-3. **2nd Button Long-Press (`5,000 ms`)**: Holding the physical button for 5 seconds while in Quick Pairing switches immediately to Stage 2 SoftAP (`WifiApProvisioningPortal::startPortal`, SSID `VESIS-<ChipID>`, password `12345678`, timeout `180 s`), exposing both the HTML captive portal form (`WiFi SSID`, `WiFi Password`, `MQTT 5.0 Server`, `Port`, `API Key / Account`, `MQTT Password`, `Bind Token`, and `Power-On State`) and the Compatible Pairing JSON endpoints (`GET /device` and `POST /ap`), persisting all settings to NVS via `saveConfig()`.
-4. **Short Press Cancel**: Pressing the button briefly while in Quick Pairing or SoftAP exits pairing mode and returns to normal operation.
+1. **First Boot (Unprovisioned)**: Starts continuously in Quick Pairing (`runQuickPairing`: BLE GATT + SmartConfig) while keeping all physical buttons, relay outputs, NVS deferred state persistence (`150 ms`), and Pulse/Inching timers 100% operational in `Offline-First` mode (`pollOfflineRelayTick`).
+2. **1st Button Long-Press (`5,000 ms`)**: At any point during runtime, holding the physical button for 5 seconds triggers Stage 1 Quick Pairing (`VESIS-<DeviceID>` BLE GATT + SmartConfig) for 180 seconds with the double-blink LED pattern.
+3. **2nd Button Long-Press (`5,000 ms`)**: Holding the physical button for 5 seconds while in Quick Pairing switches immediately to Stage 2 SoftAP (`WifiApProvisioningPortal::startPortal`, SSID `VESIS-<ChipID>`, password `12345678`, timeout `180 s`), exposing both the HTML captive portal form (`WiFi SSID`, `WiFi Password`, `MQTT 5.0 Server`, `Port`, `API Key / Account`, `MQTT Password`, `Bind Token`, and `Power-On State`) and the Compatible Pairing JSON endpoints (`GET /device` and `POST /ap`), persisting all settings to NVS via `saveConfig()`. Holding the button for 5 seconds while in SoftAP exits the SoftAP portal.
+4. **Short Press Offline Relay Control**: Pressing the physical button briefly (`50 ms .. < 5,000 ms`) at any time—including when the device is unpaired, during BLE Quick Pairing, during SoftAP mode, or while Wi-Fi/MQTT is offline—immediately toggles the corresponding relay channel locally while keeping BLE advertising or SoftAP active.
 
 ---
 
@@ -676,9 +676,9 @@ The onboard push button on **GPIO 0** provides multi-mode functionality via `Gpi
 
 - **Short Press (`50 ms .. < 5,000 ms`)**:
   - In normal operation: Toggles Relay 1 locally (Offline-First), schedules a `150 ms` deferred NVS save if `StartupMode == Stay`, emits a `"BUTTON_PRESS"` event JSON to `events`, publishes the state string (`"on"`/`"off"`) to `device_switch1_state`, and updates mDNS TXT state (`notifyMdnsStateChange`).
-  - During `Quick Pairing` or `SoftAP`: Immediately cancels pairing mode and returns to normal operation.
+  - During `Quick Pairing` (`BLE GATT` + `SmartConfig`), `SoftAP` (`VESIS-<ChipID>`), or when unpaired to any account: Immediately toggles Relay 1 locally (`pollOfflineRelayTick`), persists the relay mask to RTC/NVS, and evaluates Pulse/Inching timers while keeping BLE GATT advertising or SoftAP active without interruption.
 - **1st Long Press (`>= 5,000 ms`, triggered immediately while held)**:
-  - Launches Stage 1 **Quick Pairing** (`runQuickPairing`: advertising BLE GATT as `RELAY-<DeviceID>` + listening for Wi-Fi SmartConfig `ESP-Touch / AirKiss` simultaneously, with the double-blink LED pattern).
+  - Launches Stage 1 **Quick Pairing** (`runQuickPairing`: advertising BLE GATT as `VESIS-<DeviceID>` + listening for Wi-Fi SmartConfig `ESP-Touch / AirKiss` simultaneously, with the double-blink LED pattern).
 - **2nd Long Press (`>= 5,000 ms` while inside Quick Pairing)**:
   - Transitions immediately to Stage 2 **SoftAP Web Portal (`WifiApProvisioningPortal::startPortal`)**:
     - **SSID**: `VESIS-<ChipID>`

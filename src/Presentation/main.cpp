@@ -88,6 +88,71 @@ struct PendingFactoryUnlink {
 static PendingWifiAdoption g_pendingWifiAdoption;
 static PendingFactoryUnlink g_pendingFactoryUnlink;
 
+static void toggleRelayByButtonOffline(const std::string& targetDeviceId) {
+    if (!g_relayService || targetDeviceId.empty()) {
+        return;
+    }
+    const unsigned long now = millis();
+    g_relayService->toggle(targetDeviceId, now, "PHYSICAL_BUTTON");
+    g_rtcRelayMagic = RTC_RELAY_MAGIC;
+    g_rtcRelayMask = g_relayService->getRelayMask();
+
+    const auto* state = g_relayService->getState(targetDeviceId);
+    const bool isOn = (state && state->currentState);
+    Serial.printf("[BUTTON] Conmutación local Offline-First -> %s: %s\n",
+                  targetDeviceId.c_str(), isOn ? "ENCENDIDO" : "APAGADO");
+
+    if (g_telemetry && g_connectivity && g_connectivity->isOnline()) {
+        std::string stateStr = isOn ? "on" : "off";
+        std::string desc = "Cambio por botón físico - " + targetDeviceId + ": " +
+                           (isOn ? "ENCENDIDO" : "APAGADO");
+        g_telemetry->publishRelayState(targetDeviceId);
+        g_telemetry->publishStatus();
+        g_telemetry->publishEvent("BUTTON_PRESS", desc, stateStr, "PHYSICAL_BUTTON");
+    }
+    if (g_lanServer) {
+        g_lanServer->notifyMdnsStateChange();
+    }
+}
+
+static void pollOfflineRelayTick(bool togglePrimaryChannel) {
+    const unsigned long now = millis();
+    if (togglePrimaryChannel && !g_activeDeviceId.empty()) {
+        toggleRelayByButtonOffline(g_activeDeviceId + "-01");
+    }
+#if RELAY_CHANNEL_COUNT >= 2
+    if (g_button2.update() == domain::ButtonEvent::ShortPress && !g_activeDeviceId.empty()) {
+        toggleRelayByButtonOffline(g_activeDeviceId + "-02");
+    }
+#endif
+#if RELAY_CHANNEL_COUNT >= 3
+    if (g_button3.update() == domain::ButtonEvent::ShortPress && !g_activeDeviceId.empty()) {
+        toggleRelayByButtonOffline(g_activeDeviceId + "-03");
+    }
+#endif
+#if RELAY_CHANNEL_COUNT >= 4
+    if (g_button4.update() == domain::ButtonEvent::ShortPress && !g_activeDeviceId.empty()) {
+        toggleRelayByButtonOffline(g_activeDeviceId + "-04");
+    }
+#endif
+    if (g_relayService) {
+        g_relayService->flushDeferredSave(now);
+        std::string expiredPulseDeviceId;
+        if (g_relayService->updatePulseTimer(now, expiredPulseDeviceId)) {
+            Serial.printf("[PULSE] Modo pulso expiró (Offline-First) -> apagando %s\n",
+                          expiredPulseDeviceId.c_str());
+            if (g_lanServer) {
+                g_lanServer->notifyMdnsStateChange();
+            }
+        }
+        g_rtcRelayMagic = RTC_RELAY_MAGIC;
+        g_rtcRelayMask = g_relayService->getRelayMask();
+    }
+    if (g_lanServer) {
+        g_lanServer->loop(WiFi.status() == WL_CONNECTED);
+    }
+}
+
 static void scheduleFactoryUnlink(const std::string& reason, unsigned long delayMs = 200UL) {
     if (g_pendingFactoryUnlink.pending) {
         return;
@@ -161,7 +226,11 @@ static void executeHotWifiAdoption(const std::string& targetSsid,
         }
         g_indicator.show(domain::IndicatorStatus::Connecting);
         g_indicator.update();
-        delay(150);
+        if (g_button1.update() == domain::ButtonEvent::ShortPress) {
+            pollOfflineRelayTick(true);
+        }
+        pollOfflineRelayTick(false);
+        delay(25);
     }
 
     const char* broker = !currentCfg.mqttBroker.empty() ? currentCfg.mqttBroker.c_str() : MQTT_SERVER;
@@ -256,38 +325,37 @@ static void reloadRuntimeConnectivity() {
 
 // Ejecuta el flujo de emparejamiento de 2 etapas:
 // - Dispositivo sin credenciales (fábrica): permanece continuamente descubrible en Quick Pairing
-//   (BLE GATT + SmartConfig ESP-Touch) hasta recibir configuración, permitiendo conmutar a SoftAP con 5s de botón.
+//   (BLE GATT + SmartConfig ESP-Touch) hasta recibir configuración, permitiendo conmutar el relé
+//   con pulsación corta en todo momento y conmutar a SoftAP con 5s de botón.
 // - Dispositivo ya configurado (pulsación larga de 5s en operación): ventana interactiva de recuperación/reconfiguración.
 static void runPairingWorkflow(bool isInitialUnprovisionedBoot) {
     do {
-        Serial.println("[PAIRING] Entrando en Etapa 1: Quick Pairing (BLE + SmartConfig)...");
+        Serial.println("[PAIRING] Entrando en Etapa 1: Quick Pairing (BLE + SmartConfig, botón físico Offline-First activo)...");
         QuickPairingResult res = g_blePortal.runInteractive(
             180000UL,
             g_indicator,
-            g_button1
+            g_button1,
+            pollOfflineRelayTick
         );
 
         if (res == QuickPairingResult::Provisioned) {
             Serial.println("[PAIRING] Credenciales recibidas y verificadas en Quick Pairing.");
-            if (!isInitialUnprovisionedBoot) {
-                reloadRuntimeConnectivity();
-            }
+            reloadRuntimeConnectivity();
             return;
         }
 
         if (res == QuickPairingResult::CancelledByButton && !isInitialUnprovisionedBoot) {
-            Serial.println("[PAIRING] Emparejamiento cancelado por pulsación corta. Retomando operación normal.");
+            Serial.println("[PAIRING] Emparejamiento cancelado. Retomando operación normal.");
             reloadRuntimeConnectivity();
             return;
         }
 
         if (res == QuickPairingResult::SwitchToSoftAp) {
-            Serial.println("[PAIRING] Entrando en Etapa 2: Compatible SoftAP (VESIS-<ChipID>)...");
-            bool savedViaAp = infra::WifiApProvisioningPortal::startPortal(180, &g_indicator, &g_button1);
+            Serial.println("[PAIRING] Entrando en Etapa 2: Compatible SoftAP (VESIS-<ChipID>, botón físico Offline-First activo)...");
+            bool savedViaAp = infra::WifiApProvisioningPortal::startPortal(
+                180, &g_indicator, &g_button1, pollOfflineRelayTick);
             if (savedViaAp) {
-                if (!isInitialUnprovisionedBoot) {
-                    reloadRuntimeConnectivity();
-                }
+                reloadRuntimeConnectivity();
                 return;
             }
             if (!isInitialUnprovisionedBoot) {
@@ -369,14 +437,8 @@ void setup() {
                   isAccountBound() ? "true" : "false",
                   isProv ? "provisioned" : "unconfigured");
 
-    // 3. Si no está aprovisionado en el primer arranque, iniciar flujo de emparejamiento
-    if (!isProv) {
-        g_button1.init();
-        runPairingWorkflow(true);
-        g_configRepo.load(devConfig);
-    }
-
-    // 4. Configurar enlace Wi-Fi y cliente nativo MQTT 5.0 (ESP32_MQTTv5 + MQTTOTAv5)
+    // 3. Configurar enlace Wi-Fi, servicios de dominio/aplicación y botones físicos (Offline-First)
+    //    ANTES de iniciar el modo de emparejamiento para que el relé funcione con el botón desde el arranque.
     g_wifi.setCredentials(devConfig.wifiSsid, devConfig.wifiPass);
 
     const char* broker = !devConfig.mqttBroker.empty() ? devConfig.mqttBroker.c_str() : MQTT_SERVER;
@@ -464,8 +526,17 @@ void setup() {
             }
         });
 
-    controller.setup(true);
     g_controller = &controller;
+
+    // 4. Si no está aprovisionado en el primer arranque, iniciar flujo de emparejamiento BLE + SmartConfig
+    //    manteniendo el botón físico y el relé 100% operativos en modo Offline-First.
+    if (!isProv) {
+        timerScheduler.loadFromStorage();
+        runPairingWorkflow(true);
+        g_configRepo.load(devConfig);
+    }
+
+    controller.setup(true);
 
     if (g_wifi.isConnected()) {
         g_timeProvider.sync();

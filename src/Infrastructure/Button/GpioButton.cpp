@@ -3,25 +3,21 @@
 
 namespace relay::infra {
 
-namespace {
-volatile bool g_btnIsrTriggered = false;
-
-void IRAM_ATTR onButtonFallingEdgeIsr() {
-    g_btnIsrTriggered = true;
-}
-} // namespace
-
 void GpioButton::init() {
     pinMode(pin_, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(pin_), onButtonFallingEdgeIsr, FALLING);
     pressTicks_ = 0;
     releaseTicks_ = 0;
-    longPressFired_ = false;
+    const unsigned long now = millis();
     if (digitalRead(pin_) == LOW) {
+        // Si el botón ya está presionado al inicializar (p. ej. tras disparar LongPress de 5 s),
+        // marcar longPressFired_ = true para que al soltarlo no dispare un ShortPress espurio.
         samplingActive_ = true;
-        lastSampleMs_ = millis() - SAMPLE_TICK_MS;
+        longPressFired_ = true;
+        lastSampleMs_ = now;
     } else {
         samplingActive_ = false;
+        longPressFired_ = false;
+        lastSampleMs_ = now;
     }
 }
 
@@ -32,8 +28,7 @@ bool GpioButton::isPhysicallyPressed() const {
 domain::ButtonEvent GpioButton::update() {
     const unsigned long now = millis();
 
-    if ((g_btnIsrTriggered || digitalRead(pin_) == LOW) && !samplingActive_) {
-        g_btnIsrTriggered = false;
+    if (digitalRead(pin_) == LOW && !samplingActive_) {
         samplingActive_ = true;
         pressTicks_ = 0;
         releaseTicks_ = 0;
@@ -53,7 +48,7 @@ domain::ButtonEvent GpioButton::update() {
     if (elapsedTicks > 4U) {
         elapsedTicks = 4U;
     }
-    lastSampleMs_ += elapsedTicks * SAMPLE_TICK_MS;
+    lastSampleMs_ = now;
 
     const uint32_t debounceTicks = (debounceMs_ >= SAMPLE_TICK_MS) ? (debounceMs_ / SAMPLE_TICK_MS) : 2U;
     const uint32_t longPressTicks = (longPressMs_ >= SAMPLE_TICK_MS) ? (longPressMs_ / SAMPLE_TICK_MS) : 200U;
@@ -70,14 +65,13 @@ domain::ButtonEvent GpioButton::update() {
     }
 
     // Botón en nivel HIGH (liberado)
-    ++releaseTicks_;
+    releaseTicks_ += elapsedTicks;
     if (releaseTicks_ >= debounceTicks) {
         const bool validShortPress = (pressTicks_ >= debounceTicks && !longPressFired_);
         samplingActive_ = false;
         pressTicks_ = 0;
         releaseTicks_ = 0;
         longPressFired_ = false;
-        g_btnIsrTriggered = false;
         if (validShortPress) {
             return domain::ButtonEvent::ShortPress;
         }

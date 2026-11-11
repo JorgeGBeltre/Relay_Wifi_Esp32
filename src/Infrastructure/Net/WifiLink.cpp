@@ -40,11 +40,6 @@ bool WifiLink::connect() {
     WiFi.begin(ssid_.c_str(), pass_.c_str());
     lastReconnectAttempt_ = millis();
 
-    unsigned long start = millis();
-    while (WiFi.status() != WL_CONNECTED && (millis() - start) < 1500) {
-        delay(25);
-    }
-
     if (WiFi.status() == WL_CONNECTED) {
         saveLastWifiErrorNvs("");
         Serial.printf("[WIFI] ¡Conectado! IP: %s, RSSI: %d dBm\n",

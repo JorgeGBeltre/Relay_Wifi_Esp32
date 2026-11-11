@@ -14,6 +14,10 @@ WiFiClient& getActiveNetworkClient() {
 }
 
 void configureNetworkClient(const char* rootCa, uint16_t port) {
+    g_plainClient.setTimeout(3);
+    g_secureClient.setTimeout(3);
+    g_secureClient.setHandshakeTimeout(4);
+
     if (port == 1883) {
         g_useTls = false;
         Serial.println("[NET] Puerto 1883 detectado -> Modo TCP en claro");

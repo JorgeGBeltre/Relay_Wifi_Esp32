@@ -483,7 +483,8 @@ static void broadcastSmartConfigIdentityAck(const String& deviceId) {
 
 QuickPairingResult runQuickPairing(unsigned long timeoutMs,
                                    relay::domain::IIndicator* indicator,
-                                   relay::domain::IButtonHandler* button) {
+                                   relay::domain::IButtonHandler* button,
+                                   OfflinePairingTickCallback offlineTickCb) {
     loadConfig();
     const AppConfig previousConfig = config;
     const bool hadPriorWifi = hasValidWifiCredentials();
@@ -493,8 +494,8 @@ QuickPairingResult runQuickPairing(unsigned long timeoutMs,
     Serial.printf("[PAIRING] Estado actual NVS: %s (SSID previo: %s)\n",
                   resolveDeviceConfigState(WiFi.status() == WL_CONNECTED, false),
                   hadPriorWifi ? config.wifi_ssid.c_str() : "(ninguno)");
+    Serial.println("[PAIRING] - Pulsación corta:      Conmutar relé localmente (Offline-First, BLE sigue activo)");
     Serial.println("[PAIRING] - Pulsación larga (5s): Cambiar a SoftAP VESIS-<ChipID>");
-    Serial.println("[PAIRING] - Pulsación corta:      Salir de modo emparejamiento");
     Serial.println("[PAIRING] =========================================================");
 
     _configSaved = false;
@@ -654,6 +655,7 @@ QuickPairingResult runQuickPairing(unsigned long timeoutMs,
         unsigned long releaseWaitStart = millis();
         while (digitalRead(button->getPin()) == LOW && (millis() - releaseWaitStart) < 3000) {
             if (indicator) indicator->update();
+            if (offlineTickCb) offlineTickCb(false);
             delay(20);
         }
         button->init();
@@ -677,8 +679,29 @@ QuickPairingResult runQuickPairing(unsigned long timeoutMs,
         NimBLEDevice::deinit(true);
     };
 
+    auto pollButtonDuringVerify = [&]() {
+        if (button) {
+            auto ev = button->update();
+            if (ev == relay::domain::ButtonEvent::ShortPress && offlineTickCb) {
+                offlineTickCb(true);
+            }
+        }
+        if (offlineTickCb) {
+            offlineTickCb(false);
+        }
+    };
+
     unsigned long start = millis();
-    while ((millis() - start) < timeoutMs) {
+    for (;;) {
+        if ((millis() - start) >= timeoutMs) {
+            if (!hadPriorWifi && !isAccountBound()) {
+                // Equipo no emparejado: mantener BLE y el botón físico activos de forma continua sin reiniciar NimBLE
+                start = millis();
+            } else {
+                break;
+            }
+        }
+
         if (indicator) {
             indicator->update();
         }
@@ -699,10 +722,11 @@ QuickPairingResult runQuickPairing(unsigned long timeoutMs,
             unsigned long verifyStart = millis();
             while (WiFi.status() != WL_CONNECTED && (millis() - verifyStart) < 13000UL) {
                 if (indicator) indicator->update();
+                pollButtonDuringVerify();
                 if (_bleWifiAuthFailures >= 2 && (millis() - verifyStart) > 4500UL) {
                     break;
                 }
-                delay(50);
+                delay(25);
             }
 
             if (WiFi.status() == WL_CONNECTED) {
@@ -783,12 +807,17 @@ QuickPairingResult runQuickPairing(unsigned long timeoutMs,
                 unsigned long ipWaitStart = millis();
                 while (WiFi.status() != WL_CONNECTED && (millis() - ipWaitStart) < 12000UL) {
                     if (indicator) indicator->update();
-                    delay(50);
+                    pollButtonDuringVerify();
+                    delay(25);
                 }
 
                 if (WiFi.status() == WL_CONNECTED) {
                     // Permitir que el SDK de ESP-Touch envíe su confirmación interna antes de emitir nuestro ACK enriquecido
-                    delay(1000);
+                    for (int w = 0; w < 40; ++w) {
+                        if (indicator) indicator->update();
+                        pollButtonDuringVerify();
+                        delay(25);
+                    }
                     config.wifi_ssid = scSsid;
                     config.wifi_pass = scPass;
                     config.last_wifi_error = "";
@@ -810,18 +839,24 @@ QuickPairingResult runQuickPairing(unsigned long timeoutMs,
             }
         }
 
-        // C. Evaluar el botón físico durante Quick Pairing
+        // C. Evaluar el botón físico durante Quick Pairing:
+        //    - Pulsación corta: conmuta el relé localmente (Offline-First) manteniendo BLE activo
+        //    - Pulsación larga (5s): conmuta a Etapa 2 SoftAP Compatible (VESIS-<ChipID>)
         if (button) {
             auto ev = button->update();
             if (ev == relay::domain::ButtonEvent::LongPress) {
                 Serial.println("[PAIRING] 2ª pulsación larga (5s) -> Conmutando a SoftAP Compatible (VESIS-<ChipID>)...");
                 cleanupBleOnly();
                 return QuickPairingResult::SwitchToSoftAp;
-            } else if (ev == relay::domain::ButtonEvent::ShortPress && hadPriorWifi) {
-                Serial.println("[PAIRING] Pulsación corta detectada -> Cancelando modo emparejamiento.");
-                cleanupBleOnly();
-                return QuickPairingResult::CancelledByButton;
+            } else if (ev == relay::domain::ButtonEvent::ShortPress) {
+                Serial.println("[PAIRING] Pulsación corta en Quick Pairing -> Conmutando relé localmente (BLE continúa activo).");
+                if (offlineTickCb) {
+                    offlineTickCb(true);
+                }
             }
+        }
+        if (offlineTickCb) {
+            offlineTickCb(false);
         }
 
         delay(20);
@@ -833,5 +868,5 @@ QuickPairingResult runQuickPairing(unsigned long timeoutMs,
 }
 
 bool runBLEProvisioning(unsigned long timeoutMs) {
-    return runQuickPairing(timeoutMs, nullptr, nullptr) == QuickPairingResult::Provisioned;
+    return runQuickPairing(timeoutMs, nullptr, nullptr, nullptr) == QuickPairingResult::Provisioned;
 }

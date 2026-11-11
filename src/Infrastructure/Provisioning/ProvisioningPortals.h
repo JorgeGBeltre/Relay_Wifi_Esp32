@@ -19,8 +19,9 @@ public:
 
     QuickPairingResult runInteractive(unsigned long timeoutMs,
                                       domain::IIndicator& indicator,
-                                      domain::IButtonHandler& button) {
-        return runQuickPairing(timeoutMs, &indicator, &button);
+                                      domain::IButtonHandler& button,
+                                      OfflinePairingTickCallback offlineTickCb = nullptr) {
+        return runQuickPairing(timeoutMs, &indicator, &button, std::move(offlineTickCb));
     }
 };
 
